@@ -422,7 +422,7 @@ func ModifyKubeConfigFiles(cls []ClusterData) {
 		}
 		log.Debugf("Modifying %s", kubeFile)
 	}
-	log.Infof("✔ Kubeconfigs: export KUBECONFIG=$(echo $(git rev-parse --show-toplevel)/tools/ocpup/.config/cluster{1..3}/auth/kubeconfig-dev | sed 's/ /:/g')")
+	log.Infof("✔ Kubeconfigs: export KUBECONFIG=$(echo $(git rev-parse --show-toplevel)/.config/cluster{1..3}/auth/kubeconfig-dev | sed 's/ /:/g')")
 }
 
 //Remove machine set files
