@@ -98,7 +98,7 @@ Important config variables:
 
 | Variable Name | Description                                                                                                                           |
 |:------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
-| version       | OCP version to install. The tools supports [4.2.x] versions. |     
+| version       | OCP version to install. The tools supports OCP [4.2.x] versions. 4.2 is currently i dev preview.                                       |     
 | dnsDomain     | AWS Route53 hosted zone domain name that you own. If not using openshift-dev account, please create a public hosted zone.             | 
 | pullSecret    | Security credentials from [Red Hat portal], please put this credentials in single quotes ''.                                          | 
 | sshKey        | SSH pub key from your workstation. Must have the corresponding private key.                                                           |
