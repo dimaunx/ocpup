@@ -28,9 +28,9 @@ variable "rhcos_ami_id_ocp_4_2" {
   description = "Current Red Hat Enterprise Linux CoreOS AMI to use for boostrap and ocp 4.2 nodes. rhcos-42.80.20190725.1-hvm"
   type        = "map"
   default = {
-    "us-east-1" = "ami-05a08557dfb6a4735"
-    "us-east-2" = "ami-0686c2b124ee9a2b9"
-    "us-west-2" = "ami-0406633110a87f5d8"
+    "us-east-1" = "ami-0ae2df22579e00be5"
+    "us-east-2" = "ami-01309f148f8cfae82"
+    "us-west-2" = "ami-07c648fffd195d6d9"
   }
 }
 

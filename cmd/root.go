@@ -30,6 +30,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file location(default is ocpup.yaml in the root of the project.)")
 	rootCmd.PersistentFlags().BoolVarP(&Debug, "debug", "v", false, "debug mode")
+
 }
 
 // initConfig reads in config file and ENV variables if set.

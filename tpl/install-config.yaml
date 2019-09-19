@@ -39,6 +39,7 @@ platform:
       lbFloatingIP: {{.Platform.LbFloatingIP}}
       region: {{.Platform.Region}}
       trunkSupport: "1"
+      octaviaSupport: "0"
   {{- end}}
 pullSecret: '{{.PullSecret}}'
 sshKey: |

@@ -42,6 +42,8 @@ import (
 	"time"
 )
 
+var Username string
+
 type KubeConfig struct {
 	APIVersion string `yaml:"apiVersion"`
 	Clusters   []struct {
@@ -87,6 +89,10 @@ type ClusterData struct {
 		ExternalNetwork string `yaml:"externalNetwork,omitempty"`
 		ComputeFlavor   string `yaml:"computeFlavor,omitempty"`
 	} `yaml:"platform"`
+}
+
+type ClustersConfig struct {
+	Clusters []ClusterData
 }
 
 type HelmData struct {
@@ -357,7 +363,7 @@ func GetDependencies(v *OpenshiftData) {
 
 //Get openshift install and client binaries
 func GetOcpTools(version string) {
-	url := "https://mirror.openshift.com/pub/openshift-v4/clients/ocp" + "/" + version + "/openshift-install-linux-" + version + ".tar.gz"
+	url := "https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview" + "/" + version + "/openshift-install-linux-" + version + ".tar.gz"
 	err := DownloadFile(url, "./tmp/openshift-install-linux-"+version+".tar.gz", "openshift-install")
 	if err != nil {
 		log.Fatal(err)
@@ -370,7 +376,7 @@ func GetOcpTools(version string) {
 		log.Fatal(err.Error())
 	}
 
-	url = "https://mirror.openshift.com/pub/openshift-v4/clients/ocp" + "/" + version + "/openshift-client-linux-" + version + ".tar.gz"
+	url = "https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview" + "/" + version + "/openshift-client-linux-" + version + ".tar.gz"
 	err = DownloadFile(url, "./tmp/openshift-client-linux-"+version+".tar.gz", "oc")
 	if err != nil {
 		log.Fatal(err)
@@ -422,7 +428,7 @@ func ModifyKubeConfigFiles(cls []ClusterData) {
 		}
 		log.Debugf("Modifying %s", kubeFile)
 	}
-	log.Infof("✔ Kubeconfigs: export KUBECONFIG=$(echo $(git rev-parse --show-toplevel)/.config/cluster{1..3}/auth/kubeconfig-dev | sed 's/ /:/g')")
+	log.Infof("✔ Kubeconfigs: export KUBECONFIG=$(echo $(git rev-parse --show-toplevel)/.config/cl{1..%v}/auth/kubeconfig-dev | sed 's/ /:/g')", len(cls))
 }
 
 //Remove machine set files
@@ -457,7 +463,7 @@ func GenerateConfigDirs(cls []ClusterData) {
 		configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
 		_ = os.MkdirAll(configDir, os.ModePerm)
 
-		log.Debugf("Config directories for %s created.", cl.ClusterName)
+		log.Debugf("ClustersConfig directories for %s created.", cl.ClusterName)
 	}
 }
 
@@ -511,15 +517,17 @@ func GenerateConfigFiles(cls []ClusterData, auth *AuthData) {
 					log.Fatal(err)
 				}
 
-				cl.Platform.LbFloatingIP = "5.5.5.5"
-
 			case "aws":
 				// For AWS we are doing UPI, these values must be in the initial install-config.yaml.
-				cl.NumMasters = 1
+				cl.NumMasters = 3
 				cl.NumWorkers = 0
 			}
 
-			cl.ClusterName = c.Username + "-" + cl.ClusterName
+			if Username != "" {
+				cl.ClusterName = Username + "-" + cl.ClusterName
+			} else {
+				cl.ClusterName = c.Username + "-" + cl.ClusterName
+			}
 
 			err = t.Execute(f, combined{cl, *auth})
 			if err != nil {
@@ -531,7 +539,7 @@ func GenerateConfigFiles(cls []ClusterData, auth *AuthData) {
 				log.Fatal(err)
 			}
 
-			log.Debugf("Config files for %s generated.", cl.ClusterName)
+			log.Debugf("ClustersConfig files for %s generated.", cl.ClusterName)
 		} else {
 			log.Debugf("metadata.json exists for %s, skipping install config creation.", cl.ClusterName)
 		}
@@ -551,25 +559,20 @@ func GeneratePsk() string {
 //Parse the main config file
 func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error) {
 
-	var cluster1 ClusterData
-	err := viper.UnmarshalKey("cluster1", &cluster1)
+	var config ClustersConfig
+	var cls []ClusterData
+
+	err := viper.ReadInConfig()
 	if err != nil {
-		log.Fatal(err)
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
+		log.Fatalf("Unable to read config")
 	}
 
-	var cluster2 ClusterData
-	err = viper.UnmarshalKey("cluster2", &cluster2)
+	err = viper.Unmarshal(&config)
 	if err != nil {
-		log.Fatal(err)
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
+		log.Fatalf("Unable to unmarshal config")
 	}
-
-	var cluster3 ClusterData
-	err = viper.UnmarshalKey("cluster3", &cluster3)
-	if err != nil {
-		log.Fatal(err)
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
+	for _, cl := range config.Clusters {
+		cls = append(cls, cl)
 	}
 
 	var auth AuthData
@@ -592,8 +595,6 @@ func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error)
 		log.Fatal(err)
 		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
 	}
-
-	cls := []ClusterData{cluster1, cluster2, cluster3}
 
 	return cls, auth, helm, openshift, nil
 }
@@ -1103,7 +1104,7 @@ func (cl *ClusterData) ExtractInfraDetails() []string {
 	}
 
 	var result map[string]interface{}
-	err = json.Unmarshal([]byte(byteValue), &result)
+	err = json.Unmarshal(byteValue, &result)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1461,8 +1462,6 @@ var clusterCmd = &cobra.Command{
 		}
 		wg.Wait()
 
-		// TODO start parallel openstack based installation.
-
 		TerraformInit()
 
 		wg.Add(len(awscls))
@@ -1479,15 +1478,17 @@ var clusterCmd = &cobra.Command{
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].WaitForBootstrap(&wg)
+			go awscls[i].CreateTerraformWorkers(&openshiftConfig, &wg)
 		}
 		wg.Wait()
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].CreateTerraformWorkers(&openshiftConfig, &wg)
+			go awscls[i].WaitForBootstrap(&wg)
 		}
 		wg.Wait()
+
+		// TODO taint master nodes
 
 		wg.Add(len(awscls))
 		for i := range awscls {
@@ -1517,6 +1518,7 @@ var clusterCmd = &cobra.Command{
 		for i := range clusters {
 			go clusters[i].CreateTillerDeployment(&wg)
 		}
+
 		wg.Wait()
 
 		wg.Add(len(clusters))
@@ -1554,13 +1556,19 @@ var clusterCmd = &cobra.Command{
 			go clusters[i].WaitForSubmarinerDeployment(&wg, &helmConfig)
 		}
 		wg.Wait()
-
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		clusters, _, _, _, err := ParseConfigFile()
+		if err != nil {
+			log.Fatal(err)
+		}
 		ModifyKubeConfigFiles(clusters)
 	},
 }
 
 func init() {
 	var createCmd = &cobra.Command{Use: "create", Short: "Create resources"}
+	createCmd.Flags().StringVarP(&Username, "user", "u", "", "username to override the current username executing the tool")
 	rootCmd.AddCommand(createCmd)
 	createCmd.AddCommand(clusterCmd)
 }

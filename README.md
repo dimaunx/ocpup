@@ -38,59 +38,57 @@ Config file template:
 
 ```yaml
 openshift:
-  version: 4.1.7
-cluster1:
-  clusterName: cluster1
-  vpcCidr: 10.164.0.0/16
-  podCidr: 10.244.0.0/14
-  svcCidr: 100.94.0.0/16
-  numMasters: 3
-  numWorkers: 1
-  numGateways: 0
-  dnsDomain: devcluster.openshift.com
-  platform:
-    name: aws
-    region: us-east-1
-cluster2:
-  clusterName: cluster2
-  vpcCidr: 10.165.0.0/16
-  podCidr: 10.248.0.0/14
-  svcCidr: 100.95.0.0/16
-  numMasters: 3
-  numWorkers: 1
-  numGateways: 1
-  dnsDomain: devcluster.openshift.com
-  platform:
-    name: aws
-    region: us-east-2
-cluster3:
-  clusterName: cluster3
-  vpcCidr: 10.166.0.0/16
-  podCidr: 10.252.0.0/14
-  svcCidr: 100.96.0.0/16
-  numMasters: 3
-  numWorkers: 1
-  numGateways: 1
-  dnsDomain: devcluster.openshift.com
-  platform:
-    name: aws
-    region: us-west-2
+  version: 4.2.0-0.nightly-2019-09-18-114152
+clusters:
+  - clusterName: cl1
+    vpcCidr: 10.164.0.0/16
+    podCidr: 10.244.0.0/14
+    svcCidr: 100.94.0.0/16
+    numMasters: 3
+    numWorkers: 3
+    numGateways: 0
+    dnsDomain: devcluster.openshift.com
+    platform:
+      name: aws
+      region: us-east-1
+  - clusterName: cl2
+    vpcCidr: 10.165.0.0/16
+    podCidr: 10.248.0.0/14
+    svcCidr: 100.95.0.0/16
+    numMasters: 3
+    numWorkers: 2
+    numGateways: 1
+    dnsDomain: devcluster.openshift.com
+    platform:
+      name: aws
+      region: us-east-2
+  - clusterName: cl3
+    vpcCidr: 10.166.0.0/16
+    podCidr: 10.252.0.0/14
+    svcCidr: 100.96.0.0/16
+    numMasters: 3
+    numWorkers: 2
+    numGateways: 1
+    dnsDomain: devcluster.openshift.com
+    platform:
+      name: aws
+      region: us-west-2
 helm:
   helmRepo:
-    url: https://releases.rancher.com/submariner-charts/latest
+    url: https://submariner-io.github.io/submariner-charts/charts
     name: submariner-latest
   broker:
     namespace: submariner-k8s-broker
   engine:
     namespace: submariner
     image:
-      repository: rancher/submariner
-      tag: v0.0.1
+      repository: quay.io/submariner/submariner
+      tag: latest
   routeAgent:
     namespace: submariner
     image:
-      repository: rancher/submariner-route-agent
-      tag: v0.0.1
+      repository: quay.io/submariner/submariner-route-agent
+      tag: latest
 authentication:
   pullSecret: '{"auths"...}'
   sshKey: ssh-rsa xxx
@@ -100,7 +98,7 @@ Important config variables:
 
 | Variable Name | Description                                                                                                                           |
 |:------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
-| version       | OCP version to install. The tools supports [4.1.x] and [4.2.x] versions. Latest 4.2 version is **4.2.0-0.nightly-2019-06-03-135056**. |     
+| version       | OCP version to install. The tools supports [4.2.x] versions. |     
 | dnsDomain     | AWS Route53 hosted zone domain name that you own. If not using openshift-dev account, please create a public hosted zone.             | 
 | pullSecret    | Security credentials from [Red Hat portal], please put this credentials in single quotes ''.                                          | 
 | sshKey        | SSH pub key from your workstation. Must have the corresponding private key.                                                           |
@@ -121,11 +119,13 @@ The **bin** directory will contain all the required tools to interact with clust
 
 After the installation is complete, the export command for kubconfig files will be printed on screen.
 
-| Cluster Name | Type        | Cluster CIDR  | Service CIDR  | DNS Suffix                        |
-|:-------------|:------------|:--------------|:--------------|:----------------------------------|
-| cluster1     | AWS Broker  | 10.164.0.0/16 | 100.94.0.0/16 | cluster1.devcluster.openshift.com |
-| cluster2     | AWS Gateway | 10.165.0.0/16 | 100.95.0.0/16 | cluster2.devcluster.openshift.com |
-| cluster3     | AWS Gateway | 10.166.0.0/16 | 100.96.0.0/16 | cluster3.devcluster.openshift.com |
+| Cluster Name | Type        | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
+|:-------------|:------------|:--------------|:--------------|:------------------------------------------|
+| cl1          | AWS Broker  | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
+| cl2          | AWS Gateway | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
+| cl3          | AWS Gateway | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
+
+**username** is the current user that executes the tool.
 
 ## Update submariner deployment:
 
@@ -173,4 +173,4 @@ The deletion process takes up to 45 minutes, please be patient.
 [Route53 public hosted zone]: https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/AboutHZWorkingWith.html
 [$GOPATH configured]: https://github.com/golang/go/wiki/SettingGOPATH
 [4.1.x]: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/
-[4.2.x]: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.2.0-0.nightly-2019-06-03-135056/
+[4.2.x]: http://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/

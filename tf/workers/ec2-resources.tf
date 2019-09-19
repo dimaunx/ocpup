@@ -107,6 +107,13 @@ resource "aws_security_group" "gateway_workrer_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    from_port   = 22
+    protocol    = "tcp"
+    to_port     = 22
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   tags = merge(map(
     "Name", "${var.infra_id}-worker-gw-sg",
     "kubernetes.io/cluster/${var.infra_id}", "owned"

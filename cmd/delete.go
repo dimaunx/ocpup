@@ -66,12 +66,24 @@ var destroyClustersCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
+		var awscls []ClusterData
+		var openstackcls []ClusterData
+
+		for _, cl := range clusters {
+			switch cl.Platform.Name {
+			case "aws":
+				awscls = append(awscls, cl)
+			case "openstack":
+				openstackcls = append(openstackcls, cl)
+			}
+		}
+
 		GetDependencies(&openshiftConfig)
 
 		var wg sync.WaitGroup
-		wg.Add(len(clusters))
-		for i := range clusters {
-			go clusters[i].DeleteCluster(&wg)
+		wg.Add(len(awscls))
+		for i := range awscls {
+			go awscls[i].DeleteCluster(&wg)
 		}
 		wg.Wait()
 
