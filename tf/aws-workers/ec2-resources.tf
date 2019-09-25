@@ -72,7 +72,7 @@ resource "aws_security_group" "workrer_sg" {
   ))
 }
 
-resource "aws_security_group" "gateway_workrer_sg" {
+resource "aws_security_group" "gateway_worker_sg" {
   name   = "${var.infra_id}-worker-gw-sg"
   vpc_id = data.aws_vpc.env_vpc.id
 
@@ -96,14 +96,14 @@ resource "aws_security_group" "gateway_workrer_sg" {
   ingress {
     from_port   = 4500
     protocol    = "udp"
-    to_port     = 4500
+    to_port     = 4501
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
     from_port   = 500
     protocol    = "udp"
-    to_port     = 500
+    to_port     = 501
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -151,7 +151,7 @@ resource "aws_instance" "gateway_worker_instance" {
   ami                         = var.rhcos_ami_id
   instance_type               = var.worker_instance_type
   subnet_id                   = element(data.aws_subnet.env_vpc_public_subnet.*.id, count.index)
-  vpc_security_group_ids      = [aws_security_group.gateway_workrer_sg.id]
+  vpc_security_group_ids      = [aws_security_group.gateway_worker_sg.id]
   iam_instance_profile        = aws_iam_instance_profile.worker_instance_profile.id
   ebs_optimized               = false
   monitoring                  = false

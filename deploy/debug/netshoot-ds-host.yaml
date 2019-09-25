@@ -2,19 +2,19 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: netshoot
+  name: netshoot-host-net
 spec:
   selector:
     matchLabels:
-      app: netshoot
+      app: netshoot-host-net
   template:
     metadata:
       labels:
-        app: netshoot
+        app: netshoot-host-net
     spec:
       hostNetwork: true
       containers:
-        - name: netshoot
+        - name: netshoot-host-net
           image: nicolaka/netshoot
           imagePullPolicy: IfNotPresent
           command:

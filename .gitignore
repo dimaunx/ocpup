@@ -11,6 +11,7 @@ ocpup.yaml
 *vendor*
 bin*
 *tmp*
+*clouds.yaml*
 
 # Test binary, built with `go test -c`
 *.test

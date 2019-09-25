@@ -7,6 +7,7 @@ clouds:
       project_id: "{{.OpenStack.ProjectID}}"
       project_name: "{{.OpenStack.ProjectName}}"
       user_domain_name: "{{.OpenStack.UserDomainName}}"
+      project_domain_name: "{{.OpenStack.UserDomainName}}"
     region_name: "{{.Platform.Region}}"
     interface: "public"
     identity_api_version: 3

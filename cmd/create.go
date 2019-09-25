@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ type ClusterData struct {
 	Platform    struct {
 		Name            string `yaml:"name"`
 		Region          string `yaml:"region"`
-		LbFloatingIP    string `yaml:"lbFloatingIP,omitempty"`
+		LbFloatingIP    string `yaml:"lbFloatingIP"`
 		ExternalNetwork string `yaml:"externalNetwork,omitempty"`
 		ComputeFlavor   string `yaml:"computeFlavor,omitempty"`
 	} `yaml:"platform"`
@@ -311,7 +312,7 @@ func GetDependencies(v *OpenshiftData) {
 	}
 
 	if _, err := os.Stat("./bin/terraform"); os.IsNotExist(err) {
-		err = DownloadFile("https://releases.hashicorp.com/terraform/0.12.3/terraform_0.12.3_linux_amd64.zip", "./tmp/terraform.zip", "terraform")
+		err = DownloadFile("https://releases.hashicorp.com/terraform/0.12.9/terraform_0.12.9_linux_amd64.zip", "./tmp/terraform.zip", "terraform")
 		if err != nil {
 			log.Fatalf(err.Error())
 		}
@@ -402,12 +403,12 @@ func ModifyKubeConfigFiles(cls []ClusterData) {
 		newKubeFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig-dev")
 		kubefile, err := ioutil.ReadFile(kubeFile)
 		if err != nil {
-			log.Fatal(err)
+			log.Error(err)
 		}
 
 		err = yaml.Unmarshal(kubefile, &kubeconf)
 		if err != nil {
-			log.Fatal(err)
+			log.Error(err)
 		}
 
 		kubeconf.CurrentContext = cl.ClusterName
@@ -424,7 +425,7 @@ func ModifyKubeConfigFiles(cls []ClusterData) {
 
 		err = ioutil.WriteFile(newKubeFile, d, 0644)
 		if err != nil {
-			log.Fatal(err)
+			log.Error(err)
 		}
 		log.Debugf("Modifying %s", kubeFile)
 	}
@@ -502,7 +503,7 @@ func GenerateConfigFiles(cls []ClusterData, auth *AuthData) {
 
 			switch cl.Platform.Name {
 			case "openstack":
-				cloudsFile := filepath.Join(currentDir, ".config", cl.ClusterName, "clouds.yaml")
+				cloudsFile := filepath.Join(currentDir, "clouds.yaml")
 				cf, err := os.Create(cloudsFile)
 				if err != nil {
 					log.Fatal("create file: ", err)
@@ -516,6 +517,9 @@ func GenerateConfigFiles(cls []ClusterData, auth *AuthData) {
 				if err := cf.Close(); err != nil {
 					log.Fatal(err)
 				}
+
+				cl.NumWorkers = cl.NumWorkers + cl.NumGateways
+				cl.Platform.LbFloatingIP = cl.CreateApiDnsRecordsOsp(auth)
 
 			case "aws":
 				// For AWS we are doing UPI, these values must be in the initial install-config.yaml.
@@ -541,7 +545,7 @@ func GenerateConfigFiles(cls []ClusterData, auth *AuthData) {
 
 			log.Debugf("ClustersConfig files for %s generated.", cl.ClusterName)
 		} else {
-			log.Debugf("metadata.json exists for %s, skipping install config creation.", cl.ClusterName)
+			log.Infof("metadata.json file exists for %s, skipping install config creation.", cl.ClusterName)
 		}
 	}
 }
@@ -571,9 +575,8 @@ func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error)
 	if err != nil {
 		log.Fatalf("Unable to unmarshal config")
 	}
-	for _, cl := range config.Clusters {
-		cls = append(cls, cl)
-	}
+
+	cls = append(cls, config.Clusters...)
 
 	var auth AuthData
 	err = viper.UnmarshalKey("authentication", &auth)
@@ -744,7 +747,7 @@ func (cl *ClusterData) AddSubmarinerSecurityContext(wg *sync.WaitGroup) {
 
 }
 
-func (cl *ClusterData) LabelGatewayNodsAws(gws []*ec2.Reservation) error {
+func (cl *ClusterData) LabelGatewayNodes(gw string) error {
 
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
@@ -758,30 +761,27 @@ func (cl *ClusterData) LabelGatewayNodsAws(gws []*ec2.Reservation) error {
 		return err
 	}
 
-	for _, instance := range gws {
-		node, err := clientset.CoreV1().Nodes().Get(*instance.Instances[0].PrivateDnsName, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-
-		node.Labels["submariner.io/gateway"] = "true"
-		_, err = clientset.CoreV1().Nodes().Update(node)
-		if err != nil {
-			return err
-		}
-		log.Infof("✔ Node %s was labeled as gateway %s.", node.Name, cl.ClusterName)
+	node, err := clientset.CoreV1().Nodes().Get(gw, metav1.GetOptions{})
+	if err != nil {
+		return err
 	}
+
+	node.Labels["submariner.io/gateway"] = "true"
+	_, err = clientset.CoreV1().Nodes().Update(node)
+	if err != nil {
+		return err
+	}
+	log.Infof("✔ Node %s was labeled as gateway %s.", node.Name, cl.ClusterName)
+
 	return nil
 }
 
 //Label gateway nodes as submariner gateway
 func (cl *ClusterData) PrepareGatewayNodes(wg *sync.WaitGroup) {
-
-	// TODO find a way to differentiate between aws and openstack for gw node labeling.
-
 	infraData := cl.ExtractInfraDetails()
 
-	if cl.Platform.Name == "aws" {
+	switch cl.Platform.Name {
+	case "aws":
 		sess, err := session.NewSession(&aws.Config{Region: aws.String(cl.Platform.Region)})
 		if err != nil {
 			log.Fatal(err)
@@ -841,9 +841,42 @@ func (cl *ClusterData) PrepareGatewayNodes(wg *sync.WaitGroup) {
 			return
 		}
 
-		err = cl.LabelGatewayNodsAws(ec2Result.Reservations)
+		for _, res := range ec2Result.Reservations {
+			for _, instance := range res.Instances {
+				err = cl.LabelGatewayNodes(*instance.PrivateDnsName)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+		wg.Done()
+	case "openstack":
+		currentDir, _ := os.Getwd()
+		kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+		config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf(err.Error())
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			log.Fatalf(err.Error())
+			os.Exit(1)
+		}
+
+		nodes, err := clientset.CoreV1().Nodes().List(metav1.ListOptions{
+			LabelSelector: "node-role.kubernetes.io/worker=",
+		})
+		if err != nil {
+			log.Fatal(err.Error())
+			os.Exit(1)
+		}
+
+		for i := 1; i <= cl.NumGateways; i++ {
+			err = cl.LabelGatewayNodes(nodes.Items[i].Name)
+			if err != nil {
+				log.Fatalf(err.Error())
+			}
 		}
 		wg.Done()
 	}
@@ -964,7 +997,7 @@ func (cl *ClusterData) WaitForSubmarinerDeployment(wg *sync.WaitGroup, helm *Hel
 	}, 10*time.Second, submarinerContext.Done())
 	err = submarinerContext.Err()
 	if err != nil && err != context.Canceled {
-		log.Fatalf("Error waiting for submariner engine deployment %s %s", cl.ClusterName, err)
+		log.Errorf("Error waiting for submariner engine deployment %s %s", cl.ClusterName, err)
 		wg.Done()
 
 	}
@@ -1089,6 +1122,29 @@ func (cl *ClusterData) CreateTillerClusterRoleBinding(wg *sync.WaitGroup) {
 	}
 }
 
+func (cl *ClusterData) CreateClusterOpenStack(v *OpenshiftData) {
+	release := strings.Join(strings.Split(strings.Split(v.Version, "-")[0], ".")[:2], ".")
+	log.Infof("Creating cluster %s platform: %s. OCP version: %s release: %s.", cl.ClusterName, cl.Platform.Name, v.Version, release)
+	currentDir, _ := os.Getwd()
+	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
+	cmdName := "./bin/openshift-install"
+	cmdArgs := []string{"create", "cluster", "--dir", configDir, "--log-level", "debug"}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err := cmd.Start()
+	if err != nil {
+		log.Fatalf("Error starting Cmd: %s %s\n%s", err, cl.ClusterName, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", cl.ClusterName, buf.String())
+}
+
 //Extract infra details from metadata.json
 func (cl *ClusterData) ExtractInfraDetails() []string {
 	currentDir, _ := os.Getwd()
@@ -1113,22 +1169,123 @@ func (cl *ClusterData) ExtractInfraDetails() []string {
 	return infraDetails
 }
 
+//Run dns creation terraform osp module
+func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
+	c, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var infra_id string
+	if Username != "" {
+		infra_id = Username + "-" + cl.ClusterName
+	} else {
+		infra_id = c.Username + "-" + cl.ClusterName
+	}
+
+	log.Infof("Creating api DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
+	cmdName := "./bin/terraform"
+	cmdArgs := []string{
+		"apply", "-target", "module." + cl.ClusterName + "-osp-dns",
+		"-var", "infra_id=" + infra_id,
+		"-var", "dns_domain=" + cl.DNSDomain,
+		"-var", "public_network_name=" + cl.Platform.ExternalNetwork,
+		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
+		"-var", "osp_user_name=" + a.OpenStack.Username,
+		"-var", "osp_user_password=" + a.OpenStack.Password,
+		"-var", "osp_user_domain_name=" + a.OpenStack.UserDomainName,
+		"-var", "osp_tenant_id=" + a.OpenStack.ProjectID,
+		"-var", "osp_tenant_name=" + a.OpenStack.ProjectName,
+		"-var", "osp_region=" + cl.Platform.Region,
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-osp-dns.tfstate",
+		"-auto-approve",
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		log.Errorf("Error starting terraform: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Errorf("Error waiting for dns records creation: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", cl.ClusterName, buf.String())
+
+	output := strings.Split(buf.String(), "\n")
+	log.Infof("✔ DNS records were created for %s: %s", cl.ClusterName, output[len(output)-2])
+
+	const ansi = "[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))"
+	var re = regexp.MustCompile(ansi)
+	return re.ReplaceAllString(strings.Split(output[len(output)-2], " = ")[1], "")
+}
+
+func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) {
+	infraDetails := cl.ExtractInfraDetails()
+	log.Infof("Creating vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
+	cmdName := "./bin/terraform"
+	cmdArgs := []string{
+		"apply", "-target", "module." + cl.ClusterName + "-osp-sg",
+		"-var", "infra_id=" + infraDetails[0],
+		"-var", "dns_domain=" + cl.DNSDomain,
+		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
+		"-var", "osp_user_name=" + a.OpenStack.Username,
+		"-var", "osp_user_password=" + a.OpenStack.Password,
+		"-var", "osp_user_domain_name=" + a.OpenStack.UserDomainName,
+		"-var", "osp_tenant_id=" + a.OpenStack.ProjectID,
+		"-var", "osp_tenant_name=" + a.OpenStack.ProjectName,
+		"-var", "osp_region=" + cl.Platform.Region,
+		"-var", "public_network_name=" + cl.Platform.ExternalNetwork,
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-osp-sg.tfstate",
+		"-auto-approve",
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err := cmd.Start()
+	if err != nil {
+		log.Errorf("Error starting terraform: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Errorf("Error waiting for security group rules creation: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", cl.ClusterName, buf.String())
+
+	output := strings.Split(buf.String(), "\n")
+	log.Infof("✔ Security group rules and DNS records were created for %s: %s", cl.ClusterName, output[len(output)-2])
+	wg.Done()
+}
+
 //Run worker creation terraform module
-func (cl *ClusterData) CreateTerraformWorkers(v *OpenshiftData, wg *sync.WaitGroup) {
+func (cl *ClusterData) CreateTerraformWorkersAws(v *OpenshiftData, wg *sync.WaitGroup) {
 	release := strings.Join(strings.Split(strings.Split(v.Version, "-")[0], ".")[:2], ".")
-	log.Infof("Creating workers for %s. OCP version: %s release: %s.", cl.ClusterName, v.Version, release)
+	log.Infof("Creating workers for %s platform: %s. OCP version: %s release: %s.", cl.ClusterName, cl.Platform.Name, v.Version, release)
 	results := cl.ExtractInfraDetails()
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
-		"apply", "-target", "module." + cl.ClusterName + "-workers",
+		"apply", "-target", "module." + cl.ClusterName + "-aws-workers",
 		"-var", "aws_region=" + cl.Platform.Region,
 		"-var", "infra_id=" + results[0],
-		"-var", "vpc_cidr=" + cl.VpcCidr,
-		"-var", "dns_domain=" + cl.DNSDomain,
 		"-var", "num_worker_nodes=" + strconv.Itoa(cl.NumWorkers),
 		"-var", "num_subm_gateway_nodes=" + strconv.Itoa(cl.NumGateways),
 		"-var", "ocp_version=" + release,
-		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-workers.tfstate",
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-aws-workers.tfstate",
 		"-auto-approve",
 	}
 
@@ -1158,20 +1315,20 @@ func (cl *ClusterData) CreateTerraformWorkers(v *OpenshiftData, wg *sync.WaitGro
 }
 
 //Run infra creation terraform module
-func (cl *ClusterData) CreateTerraformInfra(v *OpenshiftData, wg *sync.WaitGroup) {
+func (cl *ClusterData) CreateTerraformInfraAws(v *OpenshiftData, wg *sync.WaitGroup) {
 	release := strings.Join(strings.Split(strings.Split(v.Version, "-")[0], ".")[:2], ".")
-	log.Infof("Creating infra for %s. OCP version: %s release: %s.", cl.ClusterName, v.Version, release)
+	log.Infof("Creating infra for %s platform: %s. OCP version: %s release: %s.", cl.ClusterName, cl.Platform.Name, v.Version, release)
 	infraDetails := cl.ExtractInfraDetails()
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
-		"apply", "-target", "module." + cl.ClusterName + "-infra",
+		"apply", "-target", "module." + cl.ClusterName + "-aws-infra",
 		"-var", "aws_region=" + cl.Platform.Region,
 		"-var", "infra_id=" + infraDetails[0],
 		"-var", "vpc_cidr=" + cl.VpcCidr,
 		"-var", "dns_domain=" + cl.DNSDomain,
 		"-var", "num_master_nodes=" + strconv.Itoa(cl.NumMasters),
 		"-var", "ocp_version=" + release,
-		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-infra.tfstate",
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-aws-infra.tfstate",
 		"-auto-approve",
 	}
 
@@ -1201,23 +1358,21 @@ func (cl *ClusterData) CreateTerraformInfra(v *OpenshiftData, wg *sync.WaitGroup
 }
 
 //Run bootstrap creation terraform module
-func (cl *ClusterData) CreateTerraformBootStrap(v *OpenshiftData, wg *sync.WaitGroup) {
+func (cl *ClusterData) CreateTerraformBootStrapAws(v *OpenshiftData, wg *sync.WaitGroup) {
 	release := strings.Join(strings.Split(strings.Split(v.Version, "-")[0], ".")[:2], ".")
 	infraDetails := cl.ExtractInfraDetails()
 	consoleUrl := []string{"https://console-openshift-console.apps", infraDetails[2], cl.DNSDomain}
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	_, err := http.Get(strings.Join(consoleUrl, "."))
 	if err != nil {
-		log.Infof("Creating bootstrap infra for %s. OCP version: %s release: %s.", cl.ClusterName, v.Version, release)
+		log.Infof("Creating bootstrap infra for %s platform: %s. OCP version: %s release: %s.", cl.ClusterName, cl.Platform.Name, v.Version, release)
 		cmdName := "./bin/terraform"
 		cmdArgs := []string{
-			"apply", "-target", "module." + cl.ClusterName + "-bootstrap",
+			"apply", "-target", "module." + cl.ClusterName + "-aws-bootstrap",
 			"-var", "aws_region=" + cl.Platform.Region,
 			"-var", "infra_id=" + infraDetails[0],
-			"-var", "vpc_cidr=" + cl.VpcCidr,
-			"-var", "dns_domain=" + cl.DNSDomain,
 			"-var", "ocp_version=" + release,
-			"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-bootstrap.tfstate",
+			"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-aws-bootstrap.tfstate",
 			"-auto-approve",
 		}
 
@@ -1250,17 +1405,15 @@ func (cl *ClusterData) CreateTerraformBootStrap(v *OpenshiftData, wg *sync.WaitG
 }
 
 //Run bootstrap deletion
-func (cl *ClusterData) DestroyTerraformBootStrap(v *OpenshiftData, wg *sync.WaitGroup) {
+func (cl *ClusterData) DestroyTerraformBootStrapAws(v *OpenshiftData, wg *sync.WaitGroup) {
 	release := strings.Join(strings.Split(strings.Split(v.Version, "-")[0], ".")[:2], ".")
-	log.Infof("Destroying bootstrap infra for %s.", cl.ClusterName)
+	log.Infof("Destroying bootstrap infra for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
 	infraDetails := cl.ExtractInfraDetails()
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
-		"destroy", "-target", "module." + cl.ClusterName + "-bootstrap",
+		"destroy", "-target", "module." + cl.ClusterName + "-aws-bootstrap",
 		"-var", "aws_region=" + cl.Platform.Region,
 		"-var", "infra_id=" + infraDetails[0],
-		"-var", "vpc_cidr=" + cl.VpcCidr,
-		"-var", "dns_domain=" + cl.DNSDomain,
 		"-var", "ocp_version=" + release,
 		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-bootstrap.tfstate",
 		"-auto-approve",
@@ -1292,7 +1445,7 @@ func (cl *ClusterData) DestroyTerraformBootStrap(v *OpenshiftData, wg *sync.Wait
 
 //Wait for ocp4 install completion
 func (cl *ClusterData) WaitForInstallComplete(wg *sync.WaitGroup) {
-	log.Infof("Waiting for installation completion %s. Up to 30 minutes.", cl.ClusterName)
+	log.Infof("Waiting for installation completion %s platform: %s. Up to 30 minutes.", cl.ClusterName, cl.Platform.Name)
 	currentDir, _ := os.Getwd()
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
 	cmdName := "./bin/openshift-install"
@@ -1309,23 +1462,25 @@ func (cl *ClusterData) WaitForInstallComplete(wg *sync.WaitGroup) {
 	}
 
 	err = cmd.Wait()
-	if err != nil {
-		log.Fatalf("Error waiting for installation completion: %s %s\n%s", err, cl.ClusterName, buf.String())
+	if err != nil && strings.Contains(buf.String(), "already exists") {
+		log.Debugf("✔ %s %s", err.Error(), cl.ClusterName)
+	} else if err != nil {
+		log.Fatalf("Error waiting for installation completion: %s %s platform: %s\n%s", err, cl.ClusterName, cl.Platform.Name, buf.String())
 	}
 
 	log.WithFields(log.Fields{
 		"cluster": cl.ClusterName,
 	}).Debugf("%s %s", cl.ClusterName, buf.String())
 
-	log.Infof("✔ Openshift was installed on %s. Connection details: %s", cl.ClusterName, configDir+"/.openshift_install.log")
+	log.Infof("✔ Openshift was installed on %s platform: %s. Detailed log: %s", cl.ClusterName, cl.Platform.Name, configDir+"/.openshift_install.log")
 	wg.Done()
 }
 
 //Wait for bootstrap completion
-func (cl *ClusterData) WaitForBootstrap(wg *sync.WaitGroup) {
+func (cl *ClusterData) WaitForBootstrapComplete(wg *sync.WaitGroup) {
 	currentDir, _ := os.Getwd()
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
-	log.Infof("Waiting for bootstrap completion %s. Up to 60 minutes. Detailed log: %s", cl.ClusterName, configDir+"/.openshift_install.log")
+	log.Infof("Waiting for bootstrap completion %s platform: %s. Up to 60 minutes. Detailed log: %s", cl.ClusterName, cl.Platform.Name, configDir+"/.openshift_install.log")
 	cmdName := "./bin/openshift-install"
 	cmdArgs := []string{"wait-for", "bootstrap-complete", "--dir", configDir}
 
@@ -1349,42 +1504,40 @@ func (cl *ClusterData) WaitForBootstrap(wg *sync.WaitGroup) {
 	}).Debugf("%s %s", cl.ClusterName, buf.String())
 
 	output := strings.Split(buf.String(), "\n")
-	log.Infof("✔ Bootstrap was complete for %s: %s", cl.ClusterName, output[len(output)-2])
+	log.Infof("✔ Bootstrap was complete for %s: platform: %s. %s", cl.ClusterName, cl.Platform.Name, output[len(output)-2])
 	wg.Done()
 }
 
 //Generate ignition configs
-func (cl *ClusterData) GenerateIgnitionConfigs(wg *sync.WaitGroup) {
+func (cl *ClusterData) GenerateIgnitionConfigsAws(wg *sync.WaitGroup) {
 	currentDir, _ := os.Getwd()
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
-	if cl.Platform.Name == "aws" {
-		cmdName := "./bin/openshift-install"
-		cmdArgs := []string{"create", "ignition-configs", "--dir", configDir, "--log-level", "debug"}
+	cmdName := "./bin/openshift-install"
+	cmdArgs := []string{"create", "ignition-configs", "--dir", configDir, "--log-level", "debug"}
 
-		cmd := exec.Command(cmdName, cmdArgs...)
-		buf := &bytes.Buffer{}
-		cmd.Stdout = buf
-		cmd.Stderr = buf
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
-		err := cmd.Start()
-		if err != nil {
-			log.Fatalf("Error starting Cmd: %s %s\n%s", err, cl.ClusterName, buf.String())
-		}
-
-		err = cmd.Wait()
-		if err != nil {
-			log.Fatalf("Error waiting for Cmd: %s %s\n%s", err, cl.ClusterName, buf.String())
-		}
-
-		log.WithFields(log.Fields{
-			"cluster": cl.ClusterName,
-		}).Debugf("%s %s", cl.ClusterName, buf.String())
+	err := cmd.Start()
+	if err != nil {
+		log.Fatalf("Error starting Cmd: %s %s\n%s", err, cl.ClusterName, buf.String())
 	}
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Fatalf("Error waiting for Cmd: %s %s\n%s", err, cl.ClusterName, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", cl.ClusterName, buf.String())
 	wg.Done()
 }
 
 //Generate manifests
-func (cl *ClusterData) GenerateManifests(wg *sync.WaitGroup) {
+func (cl *ClusterData) GenerateManifestsAws(wg *sync.WaitGroup) {
 	currentDir, _ := os.Getwd()
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
 	if cl.Platform.Name == "aws" {
@@ -1444,13 +1597,15 @@ var clusterCmd = &cobra.Command{
 
 		GetDependencies(&openshiftConfig)
 
+		TerraformInit()
+
 		log.Infof("Generating install configs, manifests and ignition configs...")
 		GenerateConfigDirs(clusters)
 		GenerateConfigFiles(clusters, &authConfig)
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].GenerateManifests(&wg)
+			go awscls[i].GenerateManifestsAws(&wg)
 		}
 		wg.Wait()
 
@@ -1458,47 +1613,53 @@ var clusterCmd = &cobra.Command{
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].GenerateIgnitionConfigs(&wg)
+			go awscls[i].GenerateIgnitionConfigsAws(&wg)
 		}
 		wg.Wait()
 
-		TerraformInit()
-
-		wg.Add(len(awscls))
-		for i := range awscls {
-			go awscls[i].CreateTerraformInfra(&openshiftConfig, &wg)
+		for i := range openstackcls {
+			go openstackcls[i].CreateClusterOpenStack(&openshiftConfig)
 		}
-		wg.Wait()
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].CreateTerraformBootStrap(&openshiftConfig, &wg)
+			go awscls[i].CreateTerraformInfraAws(&openshiftConfig, &wg)
 		}
 		wg.Wait()
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].CreateTerraformWorkers(&openshiftConfig, &wg)
+			go awscls[i].CreateTerraformBootStrapAws(&openshiftConfig, &wg)
 		}
 		wg.Wait()
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].WaitForBootstrap(&wg)
+			go awscls[i].CreateTerraformWorkersAws(&openshiftConfig, &wg)
 		}
 		wg.Wait()
 
-		// TODO taint master nodes
+		wg.Add(len(clusters))
+		for i := range clusters {
+			go clusters[i].WaitForBootstrapComplete(&wg)
+		}
+		wg.Wait()
 
-		wg.Add(len(awscls))
-		for i := range awscls {
-			go awscls[i].WaitForInstallComplete(&wg)
+		wg.Add(len(clusters))
+		for i := range clusters {
+			go clusters[i].WaitForInstallComplete(&wg)
+		}
+		wg.Wait()
+
+		wg.Add(len(openstackcls))
+		for i := range openstackcls {
+			openstackcls[i].CreateAppsDnsRecordsOsp(&authConfig, &wg)
 		}
 		wg.Wait()
 
 		wg.Add(len(awscls))
 		for i := range awscls {
-			go awscls[i].DestroyTerraformBootStrap(&openshiftConfig, &wg)
+			go awscls[i].DestroyTerraformBootStrapAws(&openshiftConfig, &wg)
 		}
 		wg.Wait()
 
@@ -1518,7 +1679,6 @@ var clusterCmd = &cobra.Command{
 		for i := range clusters {
 			go clusters[i].CreateTillerDeployment(&wg)
 		}
-
 		wg.Wait()
 
 		wg.Add(len(clusters))
@@ -1530,7 +1690,6 @@ var clusterCmd = &cobra.Command{
 		HelmInit(helmConfig.HelmRepo.URL)
 		clusters[0].InstallSubmarinerBroker(&helmConfig)
 
-		// TODO Issue with submariner gw node identification on openstack.
 		wg.Add(len(clusters[1:]))
 		for i := 1; i <= len(clusters[1:]); i++ {
 			go clusters[i].PrepareGatewayNodes(&wg)
@@ -1557,17 +1716,20 @@ var clusterCmd = &cobra.Command{
 		}
 		wg.Wait()
 	},
-	PersistentPostRun: func(cmd *cobra.Command, args []string) {
-		clusters, _, _, _, err := ParseConfigFile()
-		if err != nil {
-			log.Fatal(err)
-		}
-		ModifyKubeConfigFiles(clusters)
-	},
 }
 
 func init() {
-	var createCmd = &cobra.Command{Use: "create", Short: "Create resources"}
+	var createCmd = &cobra.Command{
+		Use:   "create",
+		Short: "Create resources",
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			clusters, _, _, _, err := ParseConfigFile()
+			if err != nil {
+				log.Fatal(err)
+			}
+			ModifyKubeConfigFiles(clusters)
+		},
+	}
 	createCmd.Flags().StringVarP(&Username, "user", "u", "", "username to override the current username executing the tool")
 	rootCmd.AddCommand(createCmd)
 	createCmd.AddCommand(clusterCmd)

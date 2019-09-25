@@ -4,14 +4,22 @@ variable "infra_id" {
 
 variable "vpc_cidr" {
   description = "AWS VPC CIDR"
+  default     = "10.165.0.0/16"
 }
 
 variable "aws_region" {
   description = "AWS region"
+  default     = "us-east-1"
 }
 
 variable "dns_domain" {
   description = "Domain name for public route53 public hosted zone."
+  default     = "devcluster.openshift.com"
+}
+
+variable "public_network_name" {
+  description = "Public network name"
+  default     = "public"
 }
 
 variable "rhcos_ami_id_ocp_4_1" {
@@ -36,6 +44,7 @@ variable "rhcos_ami_id_ocp_4_2" {
 
 variable "ocp_version" {
   description = "The version of OCP clusters you are installing."
+  default     = "4.2"
 }
 
 variable "bootstrap_instance_type" {
@@ -65,4 +74,39 @@ variable "num_worker_nodes" {
 variable "num_subm_gateway_nodes" {
   description = "Number of workers to act like submariner gateway node. Please do not modify. Controlled by ocpup.yaml"
   default     = 0
+}
+
+variable "osp_auth_url" {
+  description = "OS auth url"
+  default     = "https://test/v3"
+}
+
+variable "osp_user_name" {
+  description = "OS user name"
+  default     = "user"
+}
+
+variable "osp_user_password" {
+  description = "OS user password"
+  default     = "password"
+}
+
+variable "osp_user_domain_name" {
+  description = "OS user domain name"
+  default     = "redhat.com"
+}
+
+variable "osp_tenant_id" {
+  description = "OS tennant id"
+  default     = "some_id"
+}
+
+variable "osp_tenant_name" {
+  description = "OS tennant name"
+  default     = "some_tenant"
+}
+
+variable "osp_region" {
+  description = "OS region"
+  default     = "regionOne"
 }
