@@ -670,7 +670,6 @@ func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *Clus
 		"submariner.clusterCidr=" + cl.PodCidr,
 		"submariner.serviceCidr=" + cl.SvcCidr,
 		"submariner.natEnabled=true",
-		"submariner.debug=true",
 		"routeAgent.image.repository=" + h.RouteAgent.Image.Repository,
 		"routeAgent.image.tag=" + h.RouteAgent.Image.Tag,
 		"engine.image.repository=" + h.Engine.Image.Repository,
