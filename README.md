@@ -1,6 +1,6 @@
 # OCPUP
 
-This tool creates 3 OCP4 clusters on AWS and OPenstack and connects them with submariner.
+This tool creates 3 OCP4 clusters on AWS and Openstack and connects them with submariner.
 
 ![deployment architecture](https://raw.githubusercontent.com/dimaunx/ocpup/master/docs/img/arch.jpg)
 
@@ -136,11 +136,11 @@ The **bin** directory will contain all the required tools to interact with clust
 
 After the installation is complete, the export command for kubconfig files will be printed on screen.
 
-| Cluster Name | Type        | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
-|:-------------|:------------|:--------------|:--------------|:------------------------------------------|
-| cl1          | AWS Broker  | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
-| cl2          | AWS Gateway | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
-| cl3          | OSP Gateway | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
+| Cluster Name | Type                | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
+|:-------------|:--------------------|:--------------|:--------------|:------------------------------------------|
+| cl1          | AWS Broker public   | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
+| cl2          | AWS Gateway public  | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
+| cl3          | OSP Gateway private | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
 
 **username** is the current user that executes the tool.
 
