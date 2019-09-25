@@ -76,7 +76,7 @@ func (cl *ClusterData) DestroyAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup)
 	log.Infof("Destroying vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
-		"apply", "-target", "module." + cl.ClusterName + "-osp-sg",
+		"destroy", "-target", "module." + cl.ClusterName + "-osp-sg",
 		"-var", "infra_id=" + infraDetails[0],
 		"-var", "dns_domain=" + cl.DNSDomain,
 		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
