@@ -137,13 +137,18 @@ The **bin** directory will contain all the required tools to interact with clust
 
 After the installation is complete, the export command for kubconfig files will be printed on screen.
 
-| Cluster Name | Type                        | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
-|:-------------|:----------------------------|:--------------|:--------------|:------------------------------------------|
-| cl1          | AWS Broker + Gateway public | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
-| cl2          | AWS Gateway public          | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
-| cl3          | OSP Gateway private         | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
+The example ocpup.yaml config will create the following setup:
+
+| Cluster Name | Type                        | Machine CIDR   | Service CIDR  | Pods CIDR     | DNS Suffix                                |
+|:-------------|:----------------------------|:---------------|:--------------|:--------------|:------------------------------------------|
+| cl1          | AWS Broker + Gateway public | 10.164.0.0/16  | 100.94.0.0/16 | 10.244.0.0/14 | **username**-cl1.devcluster.openshift.com |
+| cl2          | AWS Gateway public          | 10.165.0.0/16  | 100.95.0.0/16 | 10.248.0.0/14 | **username**-cl2.devcluster.openshift.com |
+| cl3          | OSP Gateway private         | 10.166.0.0/16  | 100.96.0.0/16 | 10.252.0.0/14 | **username**-cl3.devcluster.openshift.com |
 
 **username** is the current user that executes the tool.
+
+The config must include at least two clusters and one cluster with **submarinerType=broker** set. 
+The broker cluster will also operate as a gateway cluster. 
 
 ## Update submariner deployment:
 
