@@ -49,7 +49,7 @@ func (cl *ClusterData) DeleteSubmariner(ns string) error {
 	log.WithFields(log.Fields{
 		"cluster": cl.ClusterName,
 	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Submariner was removed from %s.", cl.ClusterName)
+	log.Infof("✔ Submariner deployment in  %s namespace was removed from %s.", ns, cl.ClusterName)
 	return nil
 }
 
@@ -207,6 +207,14 @@ var deploySubmarinerCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
+		var brokercl ClusterData
+		for _, cl := range clusters {
+			switch cl.SubmarinerType {
+			case "broker":
+				brokercl = cl
+			}
+		}
+
 		var wg sync.WaitGroup
 
 		GetDependencies(&openshiftConfig)
@@ -228,12 +236,7 @@ var deploySubmarinerCmd = &cobra.Command{
 				log.Error(err)
 			}
 
-			err = clusters[0].DeleteSubmarinerCrd()
-			if err != nil {
-				log.Error(err)
-			}
-
-			for i := 1; i <= len(clusters[1:]); i++ {
+			for i := range clusters {
 				err := clusters[i].DeleteSubmariner(helmConfig.Engine.Namespace)
 				if err != nil {
 					log.Error(err)
@@ -245,23 +248,23 @@ var deploySubmarinerCmd = &cobra.Command{
 			}
 
 			HelmInit(helmConfig.HelmRepo.URL)
-			clusters[0].InstallSubmarinerBroker(&helmConfig)
+			brokercl.InstallSubmarinerBroker(&helmConfig)
 
 			psk := GeneratePsk()
 
-			wg.Add(len(clusters[1:]))
-			for i := 1; i <= len(clusters[1:]); i++ {
-				go clusters[i].InstallSubmarinerGateway(&wg, &clusters[0], &helmConfig, psk)
+			wg.Add(len(clusters))
+			for i := range clusters {
+				go clusters[i].InstallSubmarinerGateway(&wg, &brokercl, &helmConfig, psk)
 			}
 			wg.Wait()
 
-			wg.Add(len(clusters[1:]))
-			for i := 1; i <= len(clusters[1:]); i++ {
+			wg.Add(len(clusters))
+			for i := range clusters {
 				go clusters[i].WaitForSubmarinerDeployment(&wg, &helmConfig)
 			}
 			wg.Wait()
 		} else {
-			for i := 1; i <= len(clusters[1:]); i++ {
+			for i := range clusters {
 				err := clusters[i].UpdateEngineDeployment(&helmConfig)
 				if err != nil {
 					log.Error(err)

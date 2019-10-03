@@ -75,15 +75,16 @@ type KubeConfig struct {
 }
 
 type ClusterData struct {
-	ClusterName string `yaml:"clusterName"`
-	VpcCidr     string `yaml:"vpcCidr"`
-	PodCidr     string `yaml:"podCidr"`
-	SvcCidr     string `yaml:"svcCidr"`
-	NumMasters  int    `yaml:"numMasters"`
-	NumWorkers  int    `yaml:"numWorkers"`
-	NumGateways int    `yaml:"numGateways"`
-	DNSDomain   string `yaml:"dnsDomain"`
-	Platform    struct {
+	ClusterName    string `yaml:"clusterName"`
+	SubmarinerType string `yaml:"submarinerType"`
+	VpcCidr        string `yaml:"vpcCidr"`
+	PodCidr        string `yaml:"podCidr"`
+	SvcCidr        string `yaml:"svcCidr"`
+	NumMasters     int    `yaml:"numMasters"`
+	NumWorkers     int    `yaml:"numWorkers"`
+	NumGateways    int    `yaml:"numGateways"`
+	DNSDomain      string `yaml:"dnsDomain"`
+	Platform       struct {
 		Name            string `yaml:"name"`
 		Region          string `yaml:"region"`
 		LbFloatingIP    string `yaml:"lbFloatingIP"`
@@ -662,6 +663,8 @@ func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *Clus
 	cmdName := "./bin/helm"
 	setArgs := []string{
 		"ipsec.psk=" + psk,
+		"ipsec.ikePort=501",
+		"ipsec.natPort=4501",
 		"broker.server=" + strings.Join(brokerUrl, ".") + ":6443",
 		"broker.token=" + token,
 		"broker.namespace=" + h.Broker.Namespace,
@@ -675,6 +678,11 @@ func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *Clus
 		"engine.image.repository=" + h.Engine.Image.Repository,
 		"engine.image.tag=" + h.Engine.Image.Tag,
 	}
+
+	if cl.SubmarinerType == "broker" {
+		setArgs = append(setArgs, "crd.create=false")
+	}
+
 	cmdArgs := []string{
 		"install", "--debug", h.HelmRepo.Name + "/submariner",
 		"--name", "submariner",
@@ -1176,18 +1184,18 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 		log.Fatal(err)
 	}
 
-	var infra_id string
+	var infraId string
 	if Username != "" {
-		infra_id = Username + "-" + cl.ClusterName
+		infraId = Username + "-" + cl.ClusterName
 	} else {
-		infra_id = c.Username + "-" + cl.ClusterName
+		infraId = c.Username + "-" + cl.ClusterName
 	}
 
 	log.Infof("Creating api DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
 		"apply", "-target", "module." + cl.ClusterName + "-osp-dns",
-		"-var", "infra_id=" + infra_id,
+		"-var", "infra_id=" + infraId,
 		"-var", "dns_domain=" + cl.DNSDomain,
 		"-var", "public_network_name=" + cl.Platform.ExternalNetwork,
 		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
@@ -1583,6 +1591,7 @@ var clusterCmd = &cobra.Command{
 
 		var awscls []ClusterData
 		var openstackcls []ClusterData
+		var brokercl ClusterData
 
 		for _, cl := range clusters {
 			switch cl.Platform.Name {
@@ -1590,6 +1599,13 @@ var clusterCmd = &cobra.Command{
 				awscls = append(awscls, cl)
 			case "openstack":
 				openstackcls = append(openstackcls, cl)
+			}
+		}
+
+		for _, cl := range clusters {
+			switch cl.SubmarinerType {
+			case "broker":
+				brokercl = cl
 			}
 		}
 
@@ -1688,30 +1704,30 @@ var clusterCmd = &cobra.Command{
 		wg.Wait()
 
 		HelmInit(helmConfig.HelmRepo.URL)
-		clusters[0].InstallSubmarinerBroker(&helmConfig)
+		brokercl.InstallSubmarinerBroker(&helmConfig)
 
-		wg.Add(len(clusters[1:]))
-		for i := 1; i <= len(clusters[1:]); i++ {
+		wg.Add(len(clusters))
+		for i := range clusters {
 			go clusters[i].PrepareGatewayNodes(&wg)
 		}
 		wg.Wait()
 
-		wg.Add(len(clusters[1:]))
-		for i := 1; i <= len(clusters[1:]); i++ {
+		wg.Add(len(clusters))
+		for i := range clusters {
 			go clusters[i].AddSubmarinerSecurityContext(&wg)
 		}
 		wg.Wait()
 
 		psk := GeneratePsk()
 
-		wg.Add(len(clusters[1:]))
-		for i := 1; i <= len(clusters[1:]); i++ {
-			go clusters[i].InstallSubmarinerGateway(&wg, &clusters[0], &helmConfig, psk)
+		wg.Add(len(clusters))
+		for i := range clusters {
+			go clusters[i].InstallSubmarinerGateway(&wg, &brokercl, &helmConfig, psk)
 		}
 		wg.Wait()
 
-		wg.Add(len(clusters[1:]))
-		for i := 1; i <= len(clusters[1:]); i++ {
+		wg.Add(len(clusters))
+		for i := range clusters {
 			go clusters[i].WaitForSubmarinerDeployment(&wg, &helmConfig)
 		}
 		wg.Wait()
