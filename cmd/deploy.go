@@ -49,7 +49,7 @@ func (cl *ClusterData) DeleteSubmariner(ns string) error {
 	log.WithFields(log.Fields{
 		"cluster": cl.ClusterName,
 	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Submariner deployment in  %s namespace was removed from %s.", ns, cl.ClusterName)
+	log.Infof("✔ Submariner deployment in %s namespace was removed from %s.", ns, cl.ClusterName)
 	return nil
 }
 

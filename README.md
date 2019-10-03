@@ -42,12 +42,13 @@ openshift:
   version: 4.2.0-0.nightly-2019-09-18-114152
 clusters:
   - clusterName: cl1
+    submarinerType: broker
     vpcCidr: 10.164.0.0/16
     podCidr: 10.244.0.0/14
     svcCidr: 100.94.0.0/16
     numMasters: 3
-    numWorkers: 3
-    numGateways: 0
+    numWorkers: 1
+    numGateways: 1
     dnsDomain: devcluster.openshift.com
     platform:
       name: aws
@@ -57,7 +58,7 @@ clusters:
     podCidr: 10.248.0.0/14
     svcCidr: 100.95.0.0/16
     numMasters: 3
-    numWorkers: 2
+    numWorkers: 1
     numGateways: 1
     dnsDomain: devcluster.openshift.com
     platform:
@@ -68,7 +69,7 @@ clusters:
     podCidr: 10.252.0.0/14
     svcCidr: 100.96.0.0/16
     numMasters: 3
-    numWorkers: 2
+    numWorkers: 1
     numGateways: 1
     dnsDomain: devcluster.openshift.com
     platform:
@@ -136,11 +137,11 @@ The **bin** directory will contain all the required tools to interact with clust
 
 After the installation is complete, the export command for kubconfig files will be printed on screen.
 
-| Cluster Name | Type                | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
-|:-------------|:--------------------|:--------------|:--------------|:------------------------------------------|
-| cl1          | AWS Broker public   | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
-| cl2          | AWS Gateway public  | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
-| cl3          | OSP Gateway private | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
+| Cluster Name | Type                        | Cluster CIDR  | Service CIDR  | DNS Suffix                                |
+|:-------------|:----------------------------|:--------------|:--------------|:------------------------------------------|
+| cl1          | AWS Broker + Gateway public | 10.164.0.0/16 | 100.94.0.0/16 | **username**-cl1.devcluster.openshift.com |
+| cl2          | AWS Gateway public          | 10.165.0.0/16 | 100.95.0.0/16 | **username**-cl2.devcluster.openshift.com |
+| cl3          | OSP Gateway private         | 10.166.0.0/16 | 100.96.0.0/16 | **username**-cl3.devcluster.openshift.com |
 
 **username** is the current user that executes the tool.
 
@@ -203,4 +204,4 @@ The deletion process takes up to 45 minutes, please be patient.
 [$GOPATH configured]: https://github.com/golang/go/wiki/SettingGOPATH
 [4.1.x]: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/
 [4.2.x]: http://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/
-[ osp prerequisites]: https://github.com/openshift/installer/blob/master/docs/user/openstack/README.md#openstack-requirements
+[osp prerequisites]: https://github.com/openshift/installer/blob/master/docs/user/openstack/README.md#openstack-requirements
