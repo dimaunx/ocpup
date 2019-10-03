@@ -10,7 +10,7 @@ This tool creates 3 OCP4 clusters on AWS and Openstack and connects them with su
 - [awscli]
 - [Route53 public hosted zone]
 - openshift-dev AWS account access or any other AWS account with near admin privileges.
-- Upshift project access with the following [ osp prerequisites].
+- Upshift project access with the following [osp prerequisites].
 
 ## Build the tool
 
@@ -35,11 +35,11 @@ If the config is placed in other directory, pass the config file location to **o
 ocpup create clusters --config /path/to/ocpup.yaml
 ``` 
 
-Config file template that supports OSP and AWS installation:
+Config file template that supports OSP and AWS installations:
 
 ```yaml
 openshift:
-  version: 4.2.0-0.nightly-2019-09-18-114152
+  version: 4.2.0-0.nightly-2019-10-01-210901
 clusters:
   - clusterName: cl1
     submarinerType: broker
@@ -52,7 +52,7 @@ clusters:
     dnsDomain: devcluster.openshift.com
     platform:
       name: aws
-      region: us-east-1
+      region: us-east-2
   - clusterName: cl2
     vpcCidr: 10.165.0.0/16
     podCidr: 10.248.0.0/14
@@ -63,7 +63,7 @@ clusters:
     dnsDomain: devcluster.openshift.com
     platform:
       name: aws
-      region: us-east-2
+      region: us-west-2
   - clusterName: cl3
     vpcCidr: 10.166.0.0/16
     podCidr: 10.252.0.0/14
@@ -102,7 +102,7 @@ authentication:
     password: "mypassword"
     projectId: 8ce20565656frdfdf4655656
     projectName: my-upshift-project
-    userDomainName: redhat.com
+    userDomainName: mydomain.com
 ```
 
 Important config variables:
@@ -115,13 +115,19 @@ Important config variables:
 | sshKey          | SSH pub key from your workstation. Must have the corresponding private key.                                               |
 | externalNetwork | OSP public network name.                                                                                                  |     
 | computeFlavor   | OSP compute flavor for nodes.                                                                                             | 
+| region          | OSP or AWS region name.                                                                                                   | 
+
+If one of the clusters is an Openstack cluster the following parameters must be set under authentication/openstack:
+
+| Variable Name   | Description                                                                                                               |
+|:--------------- |:--------------------------------------------------------------------------------------------------------------------------|
 | authUrl         | OSP authentication url.                                                                                                   | 
-| sshKey          | SSH pub key from your workstation. Must have the corresponding private key.                                               |
+| userName        | OSP project username.                                                                                                     |
+| password        | OSP project user password.                                                                                                     |
 | projectId       | OSP project id.                                                                                                           |
 | projectName     | OSP project name.                                                                                                         |
 | userDomainName  | OSP user domain name.                                                                                                     |
 
-Any region is supported as long as it has at least 3 availability zones a,b and c.
 
 ## Create clusters:
 
@@ -135,7 +141,7 @@ The **.openshift-install.log** file in each cluster directory will contain a det
 
 The **bin** directory will contain all the required tools to interact with clusters.
 
-After the installation is complete, the export command for kubconfig files will be printed on screen.
+After the installation is complete, the export command for kubconfig files will be printed on the screen.
 
 The example ocpup.yaml config will create the following setup:
 
@@ -147,7 +153,7 @@ The example ocpup.yaml config will create the following setup:
 
 **username** is the current user that executes the tool.
 
-The config must include at least two clusters and one cluster with **submarinerType=broker** set. 
+The config must include at least two clusters and one of the clusters must have **submarinerType=broker** set. 
 The broker cluster will also operate as a gateway cluster. 
 
 ## Update submariner deployment:
