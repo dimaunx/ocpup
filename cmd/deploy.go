@@ -231,7 +231,7 @@ var deploySubmarinerCmd = &cobra.Command{
 
 		if Reinstall {
 			log.Warn("Reinstalling submariner.")
-			err := clusters[0].DeleteSubmariner(helmConfig.Broker.Namespace)
+			err := brokercl.DeleteSubmariner(helmConfig.Broker.Namespace)
 			if err != nil {
 				log.Error(err)
 			}

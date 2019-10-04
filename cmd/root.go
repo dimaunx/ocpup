@@ -8,8 +8,10 @@ import (
 	"os"
 )
 
-var cfgFile string
-var Debug bool
+var (
+	cfgFile string
+	Debug   bool
+)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
