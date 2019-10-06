@@ -1423,7 +1423,7 @@ func (cl *ClusterData) DestroyTerraformBootStrapAws(v *OpenshiftData, wg *sync.W
 		"-var", "aws_region=" + cl.Platform.Region,
 		"-var", "infra_id=" + infraDetails[0],
 		"-var", "ocp_version=" + release,
-		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-bootstrap.tfstate",
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-aws-bootstrap.tfstate",
 		"-auto-approve",
 	}
 
