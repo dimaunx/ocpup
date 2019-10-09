@@ -246,6 +246,27 @@ func HelmInit(repo string) {
 	log.Debugf("Helm repo %s was added.", repo)
 }
 
+//Run terraform init
+func TerraformInit() error {
+	log.Info("Running Terraform init.")
+	cmd := exec.Command("./bin/terraform", "init")
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err := cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting terraform init: %s %s", buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		return errors.Wrapf(err, "Error waiting for terraform init: %s %s", buf.String())
+	}
+	log.Debug(buf.String())
+	return nil
+}
+
 //Get dependencies required for multi cluster setup
 func GetDependencies(v *OpenshiftData) error {
 	if runtime.GOOS == "linux" {
@@ -597,7 +618,7 @@ func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *Clus
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 
-	brokerInfraData := broker.ExtractInfraDetails()
+	brokerInfraData, _ := broker.ExtractInfraDetails()
 
 	brokerSecretData, err := broker.ExportBrokerSecretData()
 	if brokerSecretData == nil || err != nil {
@@ -777,27 +798,27 @@ func (cl *ClusterData) ExportBrokerSecretData() (map[string][]byte, error) {
 }
 
 //Extract infra details from metadata.json
-func (cl *ClusterData) ExtractInfraDetails() []string {
+func (cl *ClusterData) ExtractInfraDetails() ([]string, error) {
 	currentDir, _ := os.Getwd()
 	metaJson := filepath.Join(currentDir, ".config", cl.ClusterName, "metadata.json")
 	jsonFile, err := os.Open(metaJson)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	byteValue, err := ioutil.ReadAll(jsonFile)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	var result map[string]interface{}
 	err = json.Unmarshal(byteValue, &result)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	infraDetails := []string{result["infraID"].(string), result["clusterID"].(string), result["clusterName"].(string)}
-	return infraDetails
+	return infraDetails, nil
 }
 
 //Wait for submariner engine deployment ro be ready
@@ -879,12 +900,17 @@ func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, wg *sync.WaitGroup) er
 		"cluster": cl.ClusterName,
 	}).Debugf("%s %s", cl.ClusterName, buf.String())
 
-	log.Infof("✔ Openshift was installed on %s platform: %s.", cl.ClusterName, cl.Platform.Name)
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	log.Infof("✔ Openshift was installed on %s platform: %s, clusterID: %s.", cl.ClusterName, cl.Platform.Name, infraDetails[0])
 	wg.Done()
 	return nil
 }
 
-//Run dns creation terraform osp module
+//Run api dns creation terraform osp module
 func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 	c, err := user.Current()
 	if err != nil {
@@ -943,8 +969,51 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 	return re.ReplaceAllString(strings.Split(output[len(output)-2], " = ")[1], "")
 }
 
+func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Applying AWS IPI modifications for %s, platform: %s.", infraDetails[0], cl.Platform.Name)
+	cmdName := "./bin/terraform"
+	cmdArgs := []string{
+		"apply", "-target", "module." + cl.ClusterName + "-aws-ipi",
+		"-var", "infra_id=" + infraDetails[0],
+		"-var", "aws_region=" + cl.Platform.Region,
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-aws-ipi.tfstate",
+		"-auto-approve",
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting terraform: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		return errors.Wrapf(err, "Error applying AWS IPI modifications: %s %s\n %s", cl.ClusterName, err, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": infraDetails[0],
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+
+	output := strings.Split(buf.String(), "\n")
+	log.Infof("✔ AWS IPI modifications were applied for %s: %s", infraDetails[0], output[len(output)-2])
+	wg.Done()
+	return nil
+}
+
+//Run apps dns creation terraform osp module
 func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) {
-	infraDetails := cl.ExtractInfraDetails()
+	infraDetails, _ := cl.ExtractInfraDetails()
 	log.Infof("Creating vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
@@ -1045,6 +1114,23 @@ var clusterCmd = &cobra.Command{
 				if err != nil {
 					defer wg.Done()
 					log.Fatal(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		err = TerraformInit()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		wg.Add(len(awscls))
+		for _, cl := range awscls {
+			go func(cl ClusterData) {
+				err := cl.CreatePublicIpiResourcesAws(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
 				}
 			}(cl)
 		}

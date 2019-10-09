@@ -71,7 +71,7 @@ func (cl *ClusterData) DestroyApiDnsRecordsOsp(v *OpenshiftData, a *AuthData, wg
 }
 
 func (cl *ClusterData) DestroyAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) error {
-	infraDetails := cl.ExtractInfraDetails()
+	infraDetails, _ := cl.ExtractInfraDetails()
 	log.Infof("Destroying vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{

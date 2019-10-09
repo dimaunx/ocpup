@@ -1,3 +1,7 @@
+provider "aws" {
+  region = var.aws_region
+}
+
 # Get vpc data.
 data "aws_vpc" "env_vpc" {
   filter {

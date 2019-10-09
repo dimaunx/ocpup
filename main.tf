@@ -1,19 +1,19 @@
-module "cl1-ipi-aws" {
-  source     = "./tf/ocp-ipi-aws"
+module "cl1-aws-ipi" {
+  source     = "./tf/aws-ipi"
   infra_id   = var.infra_id
   aws_region = var.aws_region
 
 }
 
-module "cl2-ipi-aws" {
-  source     = "./tf/ocp-ipi-aws"
+module "cl2-aws-ipi" {
+  source     = "./tf/aws-ipi"
   infra_id   = var.infra_id
   aws_region = var.aws_region
 
 }
 
-module "cl3-ipi-aws" {
-  source     = "./tf/ocp-ipi-aws"
+module "cl3-aws-ipi" {
+  source     = "./tf/aws-ipi"
   infra_id   = var.infra_id
   aws_region = var.aws_region
 
