@@ -17,6 +17,9 @@ import (
 	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
+	corev1 "k8s.io/api/core/v1"
+	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -1011,6 +1014,112 @@ func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 	return nil
 }
 
+func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+
+	saFile := filepath.Join(currentDir, "deploy/tiller/serviceaccount.json")
+	roleFile := filepath.Join(currentDir, "deploy/tiller/clusterrolebinding.json")
+	deployFile := filepath.Join(currentDir, "deploy/tiller/tillerdeploy.json")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
+	file, err := os.Open(saFile)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+	dec := json.NewDecoder(file)
+
+	var sa corev1.ServiceAccount
+	err = dec.Decode(&sa)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
+	saResult, err := clientset.CoreV1().ServiceAccounts("kube-system").Create(&sa)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
+	} else if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	} else {
+		log.Debugf("✔ Tiller service account created for %s at: %s", infraDetails[0], saResult.CreationTimestamp)
+	}
+
+	file, err = os.Open(roleFile)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+	dec = json.NewDecoder(file)
+
+	var crb rbacv1.ClusterRoleBinding
+	err = dec.Decode(&crb)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	crbResult, err := clientset.RbacV1().ClusterRoleBindings().Create(&crb)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
+	} else if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	} else {
+		log.Debugf("✔ Tiller cluster role binding created for %s at: %s", infraDetails[0], crbResult.CreationTimestamp)
+	}
+
+	file, err = os.Open(deployFile)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+	dec = json.NewDecoder(file)
+
+	var dep extensionsv1beta1.Deployment
+	err = dec.Decode(&dep)
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
+	deploymentsClient := clientset.ExtensionsV1beta1().Deployments("kube-system")
+
+	_, err = deploymentsClient.Create(&dep)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		log.Infof("✔ %s for %s.", err.Error(), infraDetails[0])
+	} else if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	} else {
+		ctx := context.Background()
+		tillerTimeout := 5 * time.Minute
+		log.Infof("Waiting up to %v for tiller to be created %s...", tillerTimeout, infraDetails[0])
+		tillerContext, cancel := context.WithTimeout(ctx, tillerTimeout)
+		wait.Until(func() {
+			tillerDeployment, err := clientset.ExtensionsV1beta1().Deployments("kube-system").Get("tiller-deploy", metav1.GetOptions{})
+			if err == nil && tillerDeployment.Status.ReadyReplicas > 0 {
+				if tillerDeployment.Status.ReadyReplicas == 1 {
+					log.Infof("✔ Tiller successfully deployed to %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+					cancel()
+					wg.Done()
+				} else {
+					log.Infof("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+				}
+			}
+		}, 30*time.Second, tillerContext.Done())
+		err = tillerContext.Err()
+		if err != nil && err != context.Canceled {
+			return errors.Wrapf(err, "Error waiting for tiller deployment %s", infraDetails[0])
+		}
+	}
+	wg.Done()
+	return nil
+}
+
 //Run apps dns creation terraform osp module
 func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) {
 	infraDetails, _ := cl.ExtractInfraDetails()
@@ -1131,6 +1240,18 @@ var clusterCmd = &cobra.Command{
 				if err != nil {
 					defer wg.Done()
 					log.Error(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				err := cl.CreateTillerDeployment(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Fatal(err)
 				}
 			}(cl)
 		}
