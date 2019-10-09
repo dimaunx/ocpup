@@ -14,7 +14,6 @@ import (
 )
 
 func (cl *ClusterData) DestroyApiDnsRecordsOsp(v *OpenshiftData, a *AuthData, wg *sync.WaitGroup) error {
-
 	c, err := user.Current()
 	if err != nil {
 		log.Fatal(err)
@@ -176,7 +175,10 @@ var destroyClustersCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
-		GetDependencies(&openshiftConfig)
+		err = GetDependencies(&openshiftConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
 
 		var openstackcls []ClusterData
 		for _, cl := range clusters {
@@ -192,8 +194,8 @@ var destroyClustersCmd = &cobra.Command{
 			go func(cl ClusterData) {
 				err := cl.DestroyApiDnsRecordsOsp(&openshiftConfig, &authConfig, &wg)
 				if err != nil {
+					defer wg.Done()
 					log.Error(err)
-					wg.Done()
 				}
 			}(cl)
 		}
@@ -204,8 +206,8 @@ var destroyClustersCmd = &cobra.Command{
 			go func(cl ClusterData) {
 				err := cl.DestroyAppsDnsRecordsOsp(&authConfig, &wg)
 				if err != nil {
+					defer wg.Done()
 					log.Error(err)
-					wg.Done()
 				}
 			}(cl)
 		}
@@ -216,8 +218,8 @@ var destroyClustersCmd = &cobra.Command{
 			go func(cl ClusterData) {
 				err := cl.DestroyCluster(&wg)
 				if err != nil {
+					defer wg.Done()
 					log.Error(err)
-					wg.Done()
 				}
 			}(cl)
 		}
@@ -229,5 +231,4 @@ func init() {
 	var destroyCmd = &cobra.Command{Use: "destroy", Short: "Destroy resources"}
 	rootCmd.AddCommand(destroyCmd)
 	destroyCmd.AddCommand(destroyClustersCmd)
-	destroyCmd.Flags().StringVarP(&Username, "user", "u", "", "username to override the current username executing the tool")
 }

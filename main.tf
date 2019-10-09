@@ -1,93 +1,22 @@
-locals {
-  rhcos_ami_id = var.ocp_version == "4.2" ? var.rhcos_ami_id_ocp_4_2 : var.rhcos_ami_id_ocp_4_1
+module "cl1-ipi-aws" {
+  source     = "./tf/ocp-ipi-aws"
+  infra_id   = var.infra_id
+  aws_region = var.aws_region
+
 }
 
-module "cl1-aws-infra" {
-  source               = "./tf/aws-infra"
-  aws_region           = var.aws_region
-  infra_id             = var.infra_id
-  vpc_cidr             = var.vpc_cidr
-  master_instance_type = var.master_instance_type
-  rhcos_ami_id         = local.rhcos_ami_id[var.aws_region]
-  num_master_nodes     = var.num_master_nodes
-  dns_domain           = var.dns_domain
+module "cl2-ipi-aws" {
+  source     = "./tf/ocp-ipi-aws"
+  infra_id   = var.infra_id
+  aws_region = var.aws_region
+
 }
 
-module "cl2-aws-infra" {
-  source               = "./tf/aws-infra"
-  aws_region           = var.aws_region
-  infra_id             = var.infra_id
-  vpc_cidr             = var.vpc_cidr
-  master_instance_type = var.master_instance_type
-  rhcos_ami_id         = local.rhcos_ami_id[var.aws_region]
-  num_master_nodes     = var.num_master_nodes
-  dns_domain           = var.dns_domain
-}
+module "cl3-ipi-aws" {
+  source     = "./tf/ocp-ipi-aws"
+  infra_id   = var.infra_id
+  aws_region = var.aws_region
 
-module "cl3-aws-infra" {
-  source               = "./tf/aws-infra"
-  aws_region           = var.aws_region
-  infra_id             = var.infra_id
-  vpc_cidr             = var.vpc_cidr
-  master_instance_type = var.master_instance_type
-  rhcos_ami_id         = local.rhcos_ami_id[var.aws_region]
-  num_master_nodes     = var.num_master_nodes
-  dns_domain           = var.dns_domain
-}
-
-module "cl1-aws-bootstrap" {
-  source                  = "./tf/aws-bootstrap"
-  aws_region              = var.aws_region
-  infra_id                = var.infra_id
-  bootstrap_instance_type = var.bootstrap_instance_type
-  rhcos_ami_id            = local.rhcos_ami_id[var.aws_region]
-}
-
-module "cl2-aws-bootstrap" {
-  source                  = "./tf/aws-bootstrap"
-  aws_region              = var.aws_region
-  infra_id                = var.infra_id
-  bootstrap_instance_type = var.bootstrap_instance_type
-  rhcos_ami_id            = local.rhcos_ami_id[var.aws_region]
-}
-
-module "cl3-aws-bootstrap" {
-  source                  = "./tf/aws-bootstrap"
-  aws_region              = var.aws_region
-  infra_id                = var.infra_id
-  bootstrap_instance_type = var.bootstrap_instance_type
-  rhcos_ami_id            = local.rhcos_ami_id[var.aws_region]
-}
-
-
-module "cl1-aws-workers" {
-  source                 = "./tf/aws-workers"
-  aws_region             = var.aws_region
-  infra_id               = var.infra_id
-  rhcos_ami_id           = local.rhcos_ami_id[var.aws_region]
-  worker_instance_type   = var.worker_instance_type
-  num_worker_nodes       = var.num_worker_nodes
-  num_subm_gateway_nodes = var.num_subm_gateway_nodes
-}
-
-module "cl2-aws-workers" {
-  source                 = "./tf/aws-workers"
-  aws_region             = var.aws_region
-  infra_id               = var.infra_id
-  rhcos_ami_id           = local.rhcos_ami_id[var.aws_region]
-  worker_instance_type   = var.worker_instance_type
-  num_worker_nodes       = var.num_worker_nodes
-  num_subm_gateway_nodes = var.num_subm_gateway_nodes
-}
-
-module "cl3-aws-workers" {
-  source                 = "./tf/aws-workers"
-  aws_region             = var.aws_region
-  infra_id               = var.infra_id
-  rhcos_ami_id           = local.rhcos_ami_id[var.aws_region]
-  worker_instance_type   = var.worker_instance_type
-  num_worker_nodes       = var.num_worker_nodes
-  num_subm_gateway_nodes = var.num_subm_gateway_nodes
 }
 
 module "cl1-osp-dns" {
