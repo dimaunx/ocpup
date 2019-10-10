@@ -150,6 +150,19 @@ func (cl *ClusterData) DestroyCluster(wg *sync.WaitGroup) error {
 		}
 	}
 
+	glob = "*-submariner-gw-machine-set.yaml"
+	files, err = filepath.Glob(filepath.Join(".config", cl.ClusterName, glob))
+	if err != nil {
+		return errors.New(err.Error())
+	}
+
+	for _, f := range files {
+		log.Debugf("Removing %s", f)
+		if err := os.Remove(f); err != nil {
+			return errors.New(err.Error())
+		}
+	}
+
 	_ = os.Remove(filepath.Join(currentDir, "clouds.yaml"))
 
 	log.WithFields(log.Fields{
