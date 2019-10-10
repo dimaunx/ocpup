@@ -1,6 +1,6 @@
 locals {
   short_cluster_name      = element(split("-", var.infra_id), 1)
-  machine_set_config_file = "${path.root}/.config/${local.short_cluster_name}/submariner-gw-machine-set-${data.aws_subnet.target_public_subnet.availability_zone}.yaml"
+  machine_set_config_file = "${path.root}/.config/${local.short_cluster_name}/${var.infra_id}-submariner-gw-machine-set.yaml"
 }
 
 # Get wokrer instances.

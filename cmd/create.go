@@ -1264,13 +1264,13 @@ func init() {
 	var createCmd = &cobra.Command{
 		Use:   "create",
 		Short: "Create resources",
-		//PersistentPostRun: func(cmd *cobra.Command, args []string) {
-		//	clusters, _, _, _, err := ParseConfigFile()
-		//	if err != nil {
-		//		log.Fatal(err)
-		//	}
-		//	ModifyKubeConfigFiles(clusters)
-		//},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			clusters, _, _, _, err := ParseConfigFile()
+			if err != nil {
+				log.Fatal(err)
+			}
+			ModifyKubeConfigFiles(clusters)
+		},
 	}
 	clusterCmd.Flags().StringVarP(&Username, "user", "u", "", "username to override the current username executing the tool")
 	rootCmd.AddCommand(createCmd)
