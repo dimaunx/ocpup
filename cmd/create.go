@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/dustin/go-humanize"
 	"github.com/mholt/archiver"
 	"github.com/pkg/errors"
@@ -465,7 +468,10 @@ func GenerateConfigFiles(cl ClusterData, auth *AuthData) error {
 				return err
 			}
 
-			cl.Platform.LbFloatingIP = cl.CreateApiDnsRecordsOsp(auth)
+			cl.Platform.LbFloatingIP, err = cl.CreateApiDnsRecordsOsp(auth)
+			if err != nil {
+				return err
+			}
 		}
 
 		if Username != "" {
@@ -540,6 +546,115 @@ func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error)
 	}
 
 	return cls, auth, helm, openshift, nil
+}
+
+func (cl *ClusterData) WaitForAwsPublicGatewayNodes(wg *sync.WaitGroup) error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+	log.Infof("Waiting up to for submariner gateway nodes to be running for %s...", infraDetails[0])
+
+	sess, err := session.NewSession(&aws.Config{Region: aws.String(cl.Platform.Region)})
+	if err != nil {
+		return err
+	}
+
+	ec2svc := ec2.New(sess)
+
+	vpcInput := &ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:kubernetes.io/cluster/" + infraDetails[0]),
+				Values: []*string{aws.String("owned")},
+			},
+		},
+	}
+
+	vpcResult, err := ec2svc.DescribeVpcs(vpcInput)
+	if err != nil {
+		return err
+	}
+
+	ec2Input := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []*string{aws.String(*vpcResult.Vpcs[0].VpcId)},
+			},
+			{
+				Name:   aws.String("tag:kubernetes.io/cluster/" + infraDetails[0]),
+				Values: []*string{aws.String("owned")},
+			},
+			{
+				Name:   aws.String("tag:submariner.io"),
+				Values: []*string{aws.String("gateway")},
+			},
+		},
+	}
+
+	err = ec2svc.WaitUntilInstanceExists(ec2Input)
+	if err != nil {
+		return err
+	}
+
+	ec2Result, err := ec2svc.DescribeInstances(ec2Input)
+	if err != nil {
+		return err
+	}
+
+	for _, res := range ec2Result.Reservations {
+		for _, instance := range res.Instances {
+			err = ec2svc.WaitUntilInstanceStatusOk(&ec2.DescribeInstanceStatusInput{
+				InstanceIds: []*string{aws.String(*instance.InstanceId)},
+			})
+			if err != nil {
+				return err
+			}
+			log.Debugf("Submariner gateway node %s AWS status is ok %s.", *instance.InstanceId, infraDetails[0])
+
+			ctx := context.Background()
+			currentDir, _ := os.Getwd()
+			kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+			config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+			if err != nil {
+				return err
+			}
+
+			clientset, err := kubernetes.NewForConfig(config)
+			if err != nil {
+				return err
+			}
+
+			submarinerTimeout := 5 * time.Minute
+			log.Infof("Waiting up to %v for submariner gateway node to be ready %s...", submarinerTimeout, infraDetails[0])
+			gwNodeContext, cancel := context.WithTimeout(ctx, submarinerTimeout)
+			nodesClient := clientset.CoreV1().Nodes()
+			wait.Until(func() {
+				nodes, err := nodesClient.List(metav1.ListOptions{LabelSelector: "submariner.io/gateway=true"})
+				if err == nil && len(nodes.Items) > 0 {
+					for _, node := range nodes.Items {
+						for _, status := range node.Status.Conditions {
+							if status.Type == "Ready" {
+								if status.Status == "True" {
+									log.Infof("Submariner gateway node %s is ready for %s.", *instance.PrivateDnsName, infraDetails[0])
+									cancel()
+									wg.Done()
+								}
+							}
+						}
+					}
+				} else {
+					log.Infof("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
+				}
+			}, 10*time.Second, gwNodeContext.Done())
+			err = gwNodeContext.Err()
+			if err != nil && err != context.Canceled {
+				return errors.Wrapf(err, "Error waiting for submariner node %s to be ready %s", *instance.PrivateDnsName, infraDetails[0])
+			}
+		}
+	}
+	return nil
 }
 
 //Label private cluster gateway nodes as submariner gateway
@@ -711,7 +826,7 @@ func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, wg *sync.WaitGroup) er
 }
 
 //Run api dns creation terraform osp module
-func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
+func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) (string, error) {
 	c, err := user.Current()
 	if err != nil {
 		log.Fatal(err)
@@ -749,12 +864,12 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 
 	err = cmd.Start()
 	if err != nil {
-		log.Errorf("Error starting terraform: %s %s\n %s", cl.ClusterName, err, buf.String())
+		return "", errors.Wrapf(err, "Error starting terraform: %s\n %s", cl.ClusterName, buf.String())
 	}
 
 	err = cmd.Wait()
 	if err != nil {
-		log.Errorf("Error waiting for dns records creation: %s %s\n %s", cl.ClusterName, err, buf.String())
+		return "", errors.Wrapf(err, "Error waiting for dns records creation: %s\n %s", cl.ClusterName, buf.String())
 	}
 
 	log.WithFields(log.Fields{
@@ -766,7 +881,7 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 
 	const ansi = "[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))"
 	var re = regexp.MustCompile(ansi)
-	return re.ReplaceAllString(strings.Split(output[len(output)-2], " = ")[1], "")
+	return re.ReplaceAllString(strings.Split(output[len(output)-2], " = ")[1], ""), nil
 }
 
 //Run apps dns creation terraform osp module
@@ -819,6 +934,45 @@ func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) 
 	return nil
 }
 
+// Deploy MachineSet config for submariner gateway nodes
+func (cl *ClusterData) DeployMachineSetConfigAws(wg *sync.WaitGroup) error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	machineSetConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, infraDetails[0]+"-submariner-gw-machine-set.yaml")
+	cmdName := "./bin/oc"
+	cmdArgs := []string{
+		"apply", "-f", machineSetConfigFile, "--kubeconfig", kubeConfigFile,
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting oc: %s\n%s", infraDetails[0], buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil && !strings.Contains(buf.String(), "already exists") {
+		return errors.Wrapf(err, "Error waiting for oc: %s\n%s", infraDetails[0], buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+	log.Infof("✔ Submariner gateway MachineSet was deployed to %s.", infraDetails[0])
+	wg.Done()
+	return nil
+}
+
+// Modify AWS IPI infrastructure
 func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 
 	infraDetails, err := cl.ExtractInfraDetails()
@@ -861,6 +1015,7 @@ func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 	return nil
 }
 
+// Create tiller deployment
 func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
@@ -1035,15 +1190,10 @@ var clusterCmd = &cobra.Command{
 		}
 		wg.Wait()
 
-		err = TerraformInit()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		wg.Add(len(publiccls))
-		for _, cl := range publiccls {
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
 			go func(cl ClusterData) {
-				err := cl.CreatePublicIpiResourcesAws(&wg)
+				err := cl.CreateTillerDeployment(&wg)
 				if err != nil {
 					defer wg.Done()
 					log.Error(err)
@@ -1064,10 +1214,39 @@ var clusterCmd = &cobra.Command{
 		}
 		wg.Wait()
 
-		wg.Add(len(clusters))
-		for _, cl := range clusters {
+		err = TerraformInit()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		wg.Add(len(publiccls))
+		for _, cl := range publiccls {
 			go func(cl ClusterData) {
-				err := cl.CreateTillerDeployment(&wg)
+				err := cl.CreatePublicIpiResourcesAws(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		wg.Add(len(publiccls))
+		for _, cl := range publiccls {
+			go func(cl ClusterData) {
+				err := cl.DeployMachineSetConfigAws(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Fatal(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		wg.Add(len(publiccls))
+		for _, cl := range publiccls {
+			go func(cl ClusterData) {
+				err := cl.WaitForAwsPublicGatewayNodes(&wg)
 				if err != nil {
 					defer wg.Done()
 					log.Error(err)
