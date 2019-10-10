@@ -986,6 +986,8 @@ var clusterCmd = &cobra.Command{
 
 		var awscls []ClusterData
 		var openstackcls []ClusterData
+		var publiccls []ClusterData
+		var privatecls []ClusterData
 
 		for _, cl := range clusters {
 			switch cl.Platform.Name {
@@ -993,6 +995,17 @@ var clusterCmd = &cobra.Command{
 				awscls = append(awscls, cl)
 			case "openstack":
 				openstackcls = append(openstackcls, cl)
+			}
+		}
+
+		for _, cl := range clusters {
+			switch cl.ClusterType {
+			case "public":
+				if cl.Platform.Name == "aws" {
+					publiccls = append(publiccls, cl)
+				}
+			case "private":
+				privatecls = append(privatecls, cl)
 			}
 		}
 
@@ -1027,29 +1040,25 @@ var clusterCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
-		wg.Add(len(awscls))
-		for _, cl := range awscls {
+		wg.Add(len(publiccls))
+		for _, cl := range publiccls {
 			go func(cl ClusterData) {
-				if cl.ClusterType == "public" {
-					err := cl.CreatePublicIpiResourcesAws(&wg)
-					if err != nil {
-						defer wg.Done()
-						log.Error(err)
-					}
+				err := cl.CreatePublicIpiResourcesAws(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
 				}
 			}(cl)
 		}
 		wg.Wait()
 
-		wg.Add(len(clusters))
-		for _, cl := range clusters {
+		wg.Add(len(privatecls))
+		for _, cl := range privatecls {
 			go func(cl ClusterData) {
-				if cl.ClusterType == "private" {
-					err := cl.PreparePrivateGatewayNodes(&wg)
-					if err != nil {
-						defer wg.Done()
-						log.Error(err)
-					}
+				err := cl.PreparePrivateGatewayNodes(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
 				}
 			}(cl)
 		}
@@ -1066,7 +1075,6 @@ var clusterCmd = &cobra.Command{
 			}(cl)
 		}
 		wg.Wait()
-
 	},
 }
 
