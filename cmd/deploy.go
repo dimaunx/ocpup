@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"io/ioutil"
 	v1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -252,48 +254,72 @@ func (cl *ClusterData) DeployNetshootDaemonSet(wg *sync.WaitGroup) error {
 }
 
 // Deploy nginx-demo pods and service
-func (cl *ClusterData) DeployNginxDemo(wg *sync.WaitGroup) error {
-	var dsFile string
+func (cl ClusterData) DeployNginxDemo(wg *sync.WaitGroup) error {
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
 	currentDir, _ := os.Getwd()
+	nginxFile := filepath.Join(currentDir, "deploy/debug/nginx-demo.yaml")
+	file, err := ioutil.ReadFile(nginxFile)
+	if err != nil {
+		return err
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
 	if err != nil {
-		return errors.Wrap(err, "error reading kubeconfig file")
+		return err
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return errors.Wrap(err, "error reading kubeconfig file")
+		return err
 	}
 
-	if HostNetwork {
-		dsFile = filepath.Join(currentDir, "deploy/debug/netshoot-ds-host.yaml")
-	} else {
-		dsFile = filepath.Join(currentDir, "deploy/debug/netshoot-ds.yaml")
-	}
+	acceptedK8sTypes := regexp.MustCompile(`(Service|DaemonSet)`)
+	fileAsString := string(file[:])
+	sepYamlfiles := strings.Split(fileAsString, "---")
+	for _, f := range sepYamlfiles {
+		if f == "\n" || f == "" {
+			// ignore empty cases
+			continue
+		}
 
-	log.Debugf("Deploying netshoot daemon set %s, host network: %v.", cl.ClusterName, HostNetwork)
+		decode := scheme.Codecs.UniversalDeserializer().Decode
+		obj, groupVersionKind, err := decode([]byte(f), nil, nil)
 
-	file, err := ioutil.ReadFile(dsFile)
-	if err != nil {
-		return errors.Wrap(err, "error loading the deployment file")
-	}
+		if err != nil {
+			return errors.Wrap(err, "Error while decoding YAML object. Err was: ")
+		}
 
-	decode := scheme.Codecs.UniversalDeserializer().Decode
-	obj, _, err := decode(file, nil, nil)
-	if err != nil {
-		return errors.New(err.Error())
+		if !acceptedK8sTypes.MatchString(groupVersionKind.Kind) {
+			log.Warnf("The file %s contains K8s object types which are not supported! Skipping object with type: %s", nginxFile, groupVersionKind.Kind)
+		} else {
+			switch o := obj.(type) {
+			case *v1.DaemonSet:
+				result, err := clientset.AppsV1().DaemonSets("default").Create(o)
+				if err != nil && strings.Contains(err.Error(), "already exists") {
+					log.Infof("✔ %s %s", err.Error(), infraDetails[0])
+				} else if err != nil {
+					return err
+				} else {
+					log.Infof("✔ nginx-demo daemon set was created for %s at: %s", infraDetails[0], result.CreationTimestamp)
+				}
+			case *corev1.Service:
+				result, err := clientset.CoreV1().Services("default").Create(o)
+				if err != nil && strings.Contains(err.Error(), "already exists") {
+					log.Infof("✔ %s %s", err.Error(), infraDetails[0])
+				} else if err != nil {
+					return err
+				} else {
+					log.Infof("✔ nginx-demo service was created for %s at: %s", infraDetails[0], result.CreationTimestamp)
+				}
+			}
+		}
 	}
-
-	_, err = clientset.AppsV1().DaemonSets("default").Create(obj.(*v1.DaemonSet))
-	if err != nil && strings.Contains(err.Error(), "already exists") {
-		log.Infof("✔ %s %s", err.Error(), cl.ClusterName)
-	} else if err != nil {
-		return errors.Wrapf(err, "Failed deploy netshoot daemon set %s", cl.ClusterName)
-	} else {
-		log.Infof("✔ Netshoot daemon set for %s was deployed.", cl.ClusterName)
-	}
-	wg.Done()
 	return nil
 }
 
