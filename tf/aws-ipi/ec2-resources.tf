@@ -40,14 +40,14 @@ resource "aws_security_group" "submariner_gw_sg" {
   ingress {
     from_port   = 4500
     protocol    = "UDP"
-    to_port     = 4500
+    to_port     = 4501
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
     from_port   = 500
     protocol    = "UDP"
-    to_port     = 500
+    to_port     = 501
     cidr_blocks = ["0.0.0.0/0"]
   }
 

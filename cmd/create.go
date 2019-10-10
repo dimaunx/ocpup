@@ -3,13 +3,10 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/dustin/go-humanize"
 	"github.com/mholt/archiver"
-	secv1 "github.com/openshift/api/security/v1"
-	scc "github.com/openshift/client-go/security/clientset/versioned/typed/security/v1"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -72,6 +69,7 @@ type KubeConfig struct {
 type ClusterData struct {
 	ClusterName    string `yaml:"clusterName"`
 	SubmarinerType string `yaml:"submarinerType"`
+	ClusterType    string `yaml:"clusterType"`
 	VpcCidr        string `yaml:"vpcCidr"`
 	PodCidr        string `yaml:"podCidr"`
 	SvcCidr        string `yaml:"svcCidr"`
@@ -212,46 +210,9 @@ func DownloadFile(url string, filepath string, filename string) error {
 	return nil
 }
 
-//Run helm init and add a submariner repository
-func HelmInit(repo string) {
-	cmdName := "./bin/helm"
-	initArgs := []string{"init", "--client-only"}
-	addArgs := []string{"repo", "add", "submariner-latest", repo}
-
-	cmd1 := exec.Command(cmdName, initArgs...)
-	cmd2 := exec.Command(cmdName, addArgs...)
-	buf := &bytes.Buffer{}
-	cmd1.Stdout = buf
-	cmd1.Stderr = buf
-	cmd2.Stdout = buf
-	cmd2.Stderr = buf
-
-	err := cmd1.Start()
-	if err != nil {
-		log.Fatalf("Error starting helm: %s\n%s", err, buf.String())
-	}
-
-	err = cmd1.Wait()
-	if err != nil {
-		log.Fatalf("Error waiting for helm: %s\n%s", err, buf.String())
-	}
-
-	err = cmd2.Start()
-	if err != nil {
-		log.Fatalf("Error starting helm: %s\n%s", err, buf.String())
-	}
-
-	err = cmd2.Wait()
-	if err != nil {
-		log.Fatalf("Error waiting for helm: %s\n%s", err, buf.String())
-	}
-
-	log.Debugf("Helm repo %s was added.", repo)
-}
-
 //Run terraform init
 func TerraformInit() error {
-	log.Info("Running Terraform init.")
+	log.Info("Running Terraform init...")
 	cmd := exec.Command("./bin/terraform", "init")
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf
@@ -581,159 +542,40 @@ func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error)
 	return cls, auth, helm, openshift, nil
 }
 
-//Install submariner broker on cluster1
-func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) {
-	currentDir, _ := os.Getwd()
-	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-	cmdName := "./bin/helm"
-	cmdArgs := []string{
-		"install", "--debug", "submariner-latest/submariner-k8s-broker",
-		"--name", h.Broker.Namespace,
-		"--namespace", h.Broker.Namespace,
-		"--kubeconfig", kubeConfigFile,
-	}
-
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err := cmd.Start()
-	if err != nil {
-		log.Fatalf("Error starting helm: %s %s\n%s", cl.ClusterName, err, buf.String())
-	}
-
-	err = cmd.Wait()
-	if err != nil && !strings.Contains(buf.String(), "already exists") {
-		log.Fatalf("Error waiting for helm: %s %s\n%s", cl.ClusterName, err, buf.String())
-	}
-
-	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Broker was installed on %s.", cl.ClusterName)
-}
-
-//Install submariner gateway
-func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *ClusterData, h *HelmData, psk string) {
-	var token string
-	var ca string
-	currentDir, _ := os.Getwd()
-	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-
-	brokerInfraData, _ := broker.ExtractInfraDetails()
-
-	brokerSecretData, err := broker.ExportBrokerSecretData()
-	if brokerSecretData == nil || err != nil {
-		log.Fatal("Unable to get broker secret data.")
-	}
-
-	for k, v := range brokerSecretData {
-		if k == "token" {
-			token = string(v)
-		} else if k == "ca.crt" {
-			ca = base64.StdEncoding.EncodeToString([]byte(string(v)))
-		}
-	}
-
-	log.Debugf("Installing gateway %s.", cl.ClusterName)
-	brokerUrl := []string{"api", brokerInfraData[2], broker.DNSDomain}
-	cmdName := "./bin/helm"
-	setArgs := []string{
-		"ipsec.psk=" + psk,
-		"ipsec.ikePort=501",
-		"ipsec.natPort=4501",
-		"broker.server=" + strings.Join(brokerUrl, ".") + ":6443",
-		"broker.token=" + token,
-		"broker.namespace=" + h.Broker.Namespace,
-		"broker.ca=" + ca,
-		"submariner.clusterId=" + cl.ClusterName,
-		"submariner.clusterCidr=" + cl.PodCidr,
-		"submariner.serviceCidr=" + cl.SvcCidr,
-		"submariner.natEnabled=true",
-		"routeAgent.image.repository=" + h.RouteAgent.Image.Repository,
-		"routeAgent.image.tag=" + h.RouteAgent.Image.Tag,
-		"engine.image.repository=" + h.Engine.Image.Repository,
-		"engine.image.tag=" + h.Engine.Image.Tag,
-	}
-
-	if cl.SubmarinerType == "broker" {
-		setArgs = append(setArgs, "crd.create=false")
-	}
-
-	cmdArgs := []string{
-		"install", "--debug", h.HelmRepo.Name + "/submariner",
-		"--name", "submariner",
-		"--namespace", h.Engine.Namespace,
-		"--kubeconfig", kubeConfigFile,
-		"--set", strings.Join(setArgs, ","),
-	}
-
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
-	if err != nil {
-		log.Fatalf("Error starting helm: %s %s\n%s", cl.ClusterName, err, buf.String())
-	}
-
-	err = cmd.Wait()
-	if err != nil && !strings.Contains(buf.String(), "already exists") {
-		log.Fatalf("Error waiting for helm: %s %s\n%s", cl.ClusterName, err, buf.String())
-	}
-
-	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Gateway was installed on %s.", cl.ClusterName)
-	wg.Done()
-}
-
-//Add submariner security policy to gateway node
-func (cl *ClusterData) AddSubmarinerSecurityContext(wg *sync.WaitGroup) {
+//Label private cluster gateway nodes as submariner gateway
+func (cl *ClusterData) PreparePrivateGatewayNodes(wg *sync.WaitGroup) error {
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
 	if err != nil {
-		log.Fatal(err.Error())
+		return err
 	}
 
-	clientset, err := scc.NewForConfig(config)
+	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	sc, err := clientset.SecurityContextConstraints().Get("privileged", metav1.GetOptions{})
+	nodes, err := clientset.CoreV1().Nodes().List(metav1.ListOptions{
+		LabelSelector: "node-role.kubernetes.io/worker=",
+	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	sec := secv1.SecurityContextConstraints{}
-
-	sc.DeepCopyInto(&sec)
-
-	submUsers := []string{
-		"system:serviceaccount:submariner:submariner-routeagent",
-		"system:serviceaccount:submariner:submariner-engine",
-	}
-
-	usersToAdd, _ := diff(submUsers, sc.Users)
-
-	sec.Users = append(sec.Users, usersToAdd...)
-
-	_, err = clientset.SecurityContextConstraints().Update(&sec)
+	err = cl.LabelGatewayNodes(nodes.Items[0].Name)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
-	log.Infof("✔ Security context updated for %s.", cl.ClusterName)
 	wg.Done()
-
+	return nil
 }
 
 func (cl *ClusterData) LabelGatewayNodes(gw string) error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
 
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
@@ -757,8 +599,7 @@ func (cl *ClusterData) LabelGatewayNodes(gw string) error {
 	if err != nil {
 		return err
 	}
-	log.Infof("✔ Node %s was labeled as gateway %s.", node.Name, cl.ClusterName)
-
+	log.Infof("✔ Node %s was labeled as gateway %s.", node.Name, infraDetails[0])
 	return nil
 }
 
@@ -822,50 +663,6 @@ func (cl *ClusterData) ExtractInfraDetails() ([]string, error) {
 
 	infraDetails := []string{result["infraID"].(string), result["clusterID"].(string), result["clusterName"].(string)}
 	return infraDetails, nil
-}
-
-//Wait for submariner engine deployment ro be ready
-func (cl *ClusterData) WaitForSubmarinerDeployment(wg *sync.WaitGroup, helm *HelmData) {
-	ctx := context.Background()
-	currentDir, _ := os.Getwd()
-	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatal(err.Error())
-		os.Exit(1)
-	}
-
-	submarinerTimeout := 5 * time.Minute
-	log.Infof("Waiting up to %v for submariner engine to be created %s...", submarinerTimeout, cl.ClusterName)
-	submarinerContext, cancel := context.WithTimeout(ctx, submarinerTimeout)
-	deploymentsClient := clientset.ExtensionsV1beta1().Deployments(helm.Engine.Namespace)
-	wait.Until(func() {
-		deployments, err := deploymentsClient.List(metav1.ListOptions{LabelSelector: "app=submariner-engine"})
-		if err == nil && len(deployments.Items) > 0 {
-			for _, deploy := range deployments.Items {
-				if deploy.Status.ReadyReplicas == 1 {
-					log.Infof("✔ Submariner engine successfully deployed to %s, ready replicas: %v", cl.ClusterName, deploy.Status.ReadyReplicas)
-					cancel()
-					wg.Done()
-				} else if deploy.Status.ReadyReplicas < 1 {
-					log.Infof("Still waiting for submariner engine deployment %s, ready replicas: %v", cl.ClusterName, deploy.Status.ReadyReplicas)
-				}
-			}
-		} else if err != nil {
-			log.Infof("Still waiting for submariner engine deployment %s %v", cl.ClusterName, err)
-		}
-	}, 10*time.Second, submarinerContext.Done())
-	err = submarinerContext.Err()
-	if err != nil && err != context.Canceled {
-		log.Errorf("Error waiting for submariner engine deployment %s %s", cl.ClusterName, err)
-		wg.Done()
-
-	}
 }
 
 // Create OCP4 cluster using IPI
@@ -972,6 +769,56 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) string {
 	return re.ReplaceAllString(strings.Split(output[len(output)-2], " = ")[1], "")
 }
 
+//Run apps dns creation terraform osp module
+func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	log.Infof("Creating vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
+	cmdName := "./bin/terraform"
+	cmdArgs := []string{
+		"apply", "-target", "module." + cl.ClusterName + "-osp-sg",
+		"-var", "infra_id=" + infraDetails[0],
+		"-var", "dns_domain=" + cl.DNSDomain,
+		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
+		"-var", "osp_user_name=" + a.OpenStack.Username,
+		"-var", "osp_user_password=" + a.OpenStack.Password,
+		"-var", "osp_user_domain_name=" + a.OpenStack.UserDomainName,
+		"-var", "osp_tenant_id=" + a.OpenStack.ProjectID,
+		"-var", "osp_tenant_name=" + a.OpenStack.ProjectName,
+		"-var", "osp_region=" + cl.Platform.Region,
+		"-var", "public_network_name=" + cl.Platform.ExternalNetwork,
+		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-osp-sg.tfstate",
+		"-auto-approve",
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting terraform: %s\n %s", infraDetails[0], buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		return errors.Wrapf(err, "Error waiting for security group rules creation: %s\n %s", infraDetails[0], err, buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": infraDetails[0],
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+
+	output := strings.Split(buf.String(), "\n")
+	log.Infof("✔ Security group rules and DNS records were created for %s: %s", infraDetails[0], output[len(output)-2])
+	wg.Done()
+	return nil
+}
+
 func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 
 	infraDetails, err := cl.ExtractInfraDetails()
@@ -1022,6 +869,9 @@ func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
 	roleFile := filepath.Join(currentDir, "deploy/tiller/clusterrolebinding.json")
 	deployFile := filepath.Join(currentDir, "deploy/tiller/tillerdeploy.json")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		return err
+	}
 
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
@@ -1105,7 +955,6 @@ func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
 				if tillerDeployment.Status.ReadyReplicas == 1 {
 					log.Infof("✔ Tiller successfully deployed to %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
 					cancel()
-					wg.Done()
 				} else {
 					log.Infof("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
 				}
@@ -1118,51 +967,6 @@ func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
 	}
 	wg.Done()
 	return nil
-}
-
-//Run apps dns creation terraform osp module
-func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) {
-	infraDetails, _ := cl.ExtractInfraDetails()
-	log.Infof("Creating vxlan security group rules and apps DNS records for %s platform: %s.", cl.ClusterName, cl.Platform.Name)
-	cmdName := "./bin/terraform"
-	cmdArgs := []string{
-		"apply", "-target", "module." + cl.ClusterName + "-osp-sg",
-		"-var", "infra_id=" + infraDetails[0],
-		"-var", "dns_domain=" + cl.DNSDomain,
-		"-var", "osp_auth_url=" + a.OpenStack.AuthURL,
-		"-var", "osp_user_name=" + a.OpenStack.Username,
-		"-var", "osp_user_password=" + a.OpenStack.Password,
-		"-var", "osp_user_domain_name=" + a.OpenStack.UserDomainName,
-		"-var", "osp_tenant_id=" + a.OpenStack.ProjectID,
-		"-var", "osp_tenant_name=" + a.OpenStack.ProjectName,
-		"-var", "osp_region=" + cl.Platform.Region,
-		"-var", "public_network_name=" + cl.Platform.ExternalNetwork,
-		"-state", "tf/state/" + "terraform-" + cl.ClusterName + "-osp-sg.tfstate",
-		"-auto-approve",
-	}
-
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err := cmd.Start()
-	if err != nil {
-		log.Errorf("Error starting terraform: %s %s\n %s", cl.ClusterName, err, buf.String())
-	}
-
-	err = cmd.Wait()
-	if err != nil {
-		log.Errorf("Error waiting for security group rules creation: %s %s\n %s", cl.ClusterName, err, buf.String())
-	}
-
-	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-
-	output := strings.Split(buf.String(), "\n")
-	log.Infof("✔ Security group rules and DNS records were created for %s: %s", cl.ClusterName, output[len(output)-2])
-	wg.Done()
 }
 
 var clusterCmd = &cobra.Command{
@@ -1182,7 +986,6 @@ var clusterCmd = &cobra.Command{
 
 		var awscls []ClusterData
 		var openstackcls []ClusterData
-		//var brokercl ClusterData
 
 		for _, cl := range clusters {
 			switch cl.Platform.Name {
@@ -1192,15 +995,6 @@ var clusterCmd = &cobra.Command{
 				openstackcls = append(openstackcls, cl)
 			}
 		}
-
-		//for _, cl := range clusters {
-		//	switch cl.SubmarinerType {
-		//	case "broker":
-		//		brokercl = cl
-		//	}
-		//}
-
-		//ctx, cancel := context.WithCancel(context.Background())
 
 		err = GetDependencies(&openshiftConfig)
 		if err != nil {
@@ -1236,10 +1030,26 @@ var clusterCmd = &cobra.Command{
 		wg.Add(len(awscls))
 		for _, cl := range awscls {
 			go func(cl ClusterData) {
-				err := cl.CreatePublicIpiResourcesAws(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Error(err)
+				if cl.ClusterType == "public" {
+					err := cl.CreatePublicIpiResourcesAws(&wg)
+					if err != nil {
+						defer wg.Done()
+						log.Error(err)
+					}
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				if cl.ClusterType == "private" {
+					err := cl.PreparePrivateGatewayNodes(&wg)
+					if err != nil {
+						defer wg.Done()
+						log.Error(err)
+					}
 				}
 			}(cl)
 		}
@@ -1251,7 +1061,7 @@ var clusterCmd = &cobra.Command{
 				err := cl.CreateTillerDeployment(&wg)
 				if err != nil {
 					defer wg.Done()
-					log.Fatal(err)
+					log.Error(err)
 				}
 			}(cl)
 		}

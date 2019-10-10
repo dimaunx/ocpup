@@ -3,7 +3,6 @@ module ocpup
 go 1.12
 
 require (
-	github.com/aws/aws-sdk-go v1.20.15
 	github.com/dsnet/compress v0.0.1 // indirect
 	github.com/dustin/go-humanize v1.0.0
 	github.com/gogo/protobuf v1.0.0 // indirect

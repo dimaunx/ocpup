@@ -2,12 +2,17 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
+	secv1 "github.com/openshift/api/security/v1"
+	scc "github.com/openshift/client-go/security/clientset/versioned/typed/security/v1"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"io/ioutil"
 	v1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -16,16 +21,63 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
 	EngineImage     string
 	RouteAgentImage string
 	Reinstall       bool
+	Update          bool
 	HostNetwork     bool
 )
 
+//Run helm init and add a submariner repository
+func HelmInit(repo string) error {
+	log.Infof("Running helm init...")
+	cmdName := "./bin/helm"
+	initArgs := []string{"init", "--client-only"}
+	addArgs := []string{"repo", "add", "submariner-latest", repo}
+
+	cmd1 := exec.Command(cmdName, initArgs...)
+	cmd2 := exec.Command(cmdName, addArgs...)
+	buf := &bytes.Buffer{}
+	cmd1.Stdout = buf
+	cmd1.Stderr = buf
+	cmd2.Stdout = buf
+	cmd2.Stderr = buf
+
+	err := cmd1.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting helm: \n%s", buf.String())
+	}
+
+	err = cmd1.Wait()
+	if err != nil {
+		return errors.Wrapf(err, "Error waiting for helm: \n%s", buf.String())
+	}
+
+	err = cmd2.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting helm: \n%s", buf.String())
+	}
+
+	err = cmd2.Wait()
+	if err != nil {
+		return errors.Wrapf(err, "Error waiting for helm: \n%s", buf.String())
+	}
+
+	log.Debugf("Helm repo %s was added.", repo)
+	return nil
+}
+
+// Delete submariner helm deployment
 func (cl *ClusterData) DeleteSubmariner(ns string) error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	cmdName := "./bin/helm"
@@ -36,24 +88,30 @@ func (cl *ClusterData) DeleteSubmariner(ns string) error {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
-		return errors.Wrapf(err, "Error starting helm: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
 	}
 
 	err = cmd.Wait()
 	if err != nil && !strings.Contains(buf.String(), "not found") {
-		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
 	}
 
 	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Submariner deployment in %s namespace was removed from %s.", ns, cl.ClusterName)
+		"cluster": infraDetails[0],
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+	log.Infof("✔ Submariner deployment in %s namespace was removed from %s.", ns, infraDetails[0])
 	return nil
 }
 
+// Delete submariner CRDs
 func (cl *ClusterData) DeleteSubmarinerCrd() error {
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
 	currentDir, _ := os.Getwd()
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	cmdName := "./bin/oc"
@@ -66,20 +124,20 @@ func (cl *ClusterData) DeleteSubmarinerCrd() error {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
-		return errors.Wrapf(err, "Error starting helm: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
 	}
 
 	err = cmd.Wait()
 	if err != nil && !strings.Contains(buf.String(), "not found") {
-		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
 	}
 
 	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-	log.Infof("✔ Submariner CRDs were removed from %s.", cl.ClusterName)
+		"cluster": infraDetails[0],
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+	log.Infof("✔ Submariner CRDs were removed from %s.", infraDetails[0])
 	return nil
 }
 
@@ -147,6 +205,7 @@ func (cl *ClusterData) UpdateRouteAgentDaemonSet(h *HelmData) error {
 	return nil
 }
 
+// Deploy netshoot pods
 func (cl *ClusterData) DeployNetshootDaemonSet(wg *sync.WaitGroup) error {
 	var dsFile string
 	currentDir, _ := os.Getwd()
@@ -192,6 +251,272 @@ func (cl *ClusterData) DeployNetshootDaemonSet(wg *sync.WaitGroup) error {
 	return nil
 }
 
+// Deploy nginx-demo pods and service
+func (cl *ClusterData) DeployNginxDemo(wg *sync.WaitGroup) error {
+	var dsFile string
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		return errors.Wrap(err, "error reading kubeconfig file")
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return errors.Wrap(err, "error reading kubeconfig file")
+	}
+
+	if HostNetwork {
+		dsFile = filepath.Join(currentDir, "deploy/debug/netshoot-ds-host.yaml")
+	} else {
+		dsFile = filepath.Join(currentDir, "deploy/debug/netshoot-ds.yaml")
+	}
+
+	log.Debugf("Deploying netshoot daemon set %s, host network: %v.", cl.ClusterName, HostNetwork)
+
+	file, err := ioutil.ReadFile(dsFile)
+	if err != nil {
+		return errors.Wrap(err, "error loading the deployment file")
+	}
+
+	decode := scheme.Codecs.UniversalDeserializer().Decode
+	obj, _, err := decode(file, nil, nil)
+	if err != nil {
+		return errors.New(err.Error())
+	}
+
+	_, err = clientset.AppsV1().DaemonSets("default").Create(obj.(*v1.DaemonSet))
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		log.Infof("✔ %s %s", err.Error(), cl.ClusterName)
+	} else if err != nil {
+		return errors.Wrapf(err, "Failed deploy netshoot daemon set %s", cl.ClusterName)
+	} else {
+		log.Infof("✔ Netshoot daemon set for %s was deployed.", cl.ClusterName)
+	}
+	wg.Done()
+	return nil
+}
+
+//Install submariner broker
+func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	cmdName := "./bin/helm"
+	cmdArgs := []string{
+		"install", "--debug", "submariner-latest/submariner-k8s-broker",
+		"--name", h.Broker.Namespace,
+		"--namespace", h.Broker.Namespace,
+		"--kubeconfig", kubeConfigFile,
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil && !strings.Contains(buf.String(), "already exists") {
+		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+	log.Infof("✔ Broker was installed on %s.", infraDetails[0])
+	return nil
+}
+
+//Install submariner gateway
+func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *ClusterData, h *HelmData, psk string) error {
+	var token string
+	var ca string
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+
+	brokerInfraData, err := broker.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	brokerSecretData, err := broker.ExportBrokerSecretData()
+	if brokerSecretData == nil || err != nil {
+		return errors.New("Unable to get broker secret data.")
+	}
+
+	for k, v := range brokerSecretData {
+		if k == "token" {
+			token = string(v)
+		} else if k == "ca.crt" {
+			ca = base64.StdEncoding.EncodeToString([]byte(string(v)))
+		}
+	}
+
+	log.Debugf("Installing gateway %s.", cl.ClusterName)
+	brokerUrl := []string{"api", brokerInfraData[2], broker.DNSDomain}
+	cmdName := "./bin/helm"
+	setArgs := []string{
+		"ipsec.psk=" + psk,
+		"ipsec.ikePort=501",
+		"ipsec.natPort=4501",
+		"broker.server=" + strings.Join(brokerUrl, ".") + ":6443",
+		"broker.token=" + token,
+		"broker.namespace=" + h.Broker.Namespace,
+		"broker.ca=" + ca,
+		"submariner.clusterId=" + cl.ClusterName,
+		"submariner.clusterCidr=" + cl.PodCidr,
+		"submariner.serviceCidr=" + cl.SvcCidr,
+		"submariner.natEnabled=true",
+		"routeAgent.image.repository=" + h.RouteAgent.Image.Repository,
+		"routeAgent.image.tag=" + h.RouteAgent.Image.Tag,
+		"engine.image.repository=" + h.Engine.Image.Repository,
+		"engine.image.tag=" + h.Engine.Image.Tag,
+	}
+
+	if cl.SubmarinerType == "broker" {
+		setArgs = append(setArgs, "crd.create=false")
+	}
+
+	cmdArgs := []string{
+		"install", "--debug", h.HelmRepo.Name + "/submariner",
+		"--name", "submariner",
+		"--namespace", h.Engine.Namespace,
+		"--kubeconfig", kubeConfigFile,
+		"--set", strings.Join(setArgs, ","),
+	}
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	buf := &bytes.Buffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+
+	err = cmd.Start()
+	if err != nil {
+		return errors.Wrapf(err, "Error starting helm: %s %s\n%s", infraDetails[0], buf.String())
+	}
+
+	err = cmd.Wait()
+	if err != nil && !strings.Contains(buf.String(), "already exists") {
+		return errors.Wrapf(err, "Error waiting for helm: %s %s\n%s", infraDetails[0], buf.String())
+	}
+
+	log.WithFields(log.Fields{
+		"cluster": cl.ClusterName,
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+	log.Infof("✔ Gateway was installed on %s, platform: %s.", infraDetails[0], cl.Platform.Name)
+	wg.Done()
+	return nil
+}
+
+//Add submariner security policy to gateway node
+func (cl *ClusterData) AddSubmarinerSecurityContext(wg *sync.WaitGroup) error {
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		return err
+	}
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	clientset, err := scc.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	sc, err := clientset.SecurityContextConstraints().Get("privileged", metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	sec := secv1.SecurityContextConstraints{}
+
+	sc.DeepCopyInto(&sec)
+
+	submUsers := []string{
+		"system:serviceaccount:submariner:submariner-routeagent",
+		"system:serviceaccount:submariner:submariner-engine",
+	}
+
+	usersToAdd, _ := diff(submUsers, sc.Users)
+
+	sec.Users = append(sec.Users, usersToAdd...)
+
+	_, err = clientset.SecurityContextConstraints().Update(&sec)
+	if err != nil {
+		return err
+	}
+
+	log.Infof("✔ Security context updated for %s.", infraDetails[0])
+	wg.Done()
+	return nil
+}
+
+//Wait for submariner engine deployment ro be ready
+func (cl *ClusterData) WaitForSubmarinerDeployment(wg *sync.WaitGroup, helm *HelmData) error {
+	ctx := context.Background()
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		return err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
+	submarinerTimeout := 5 * time.Minute
+	log.Infof("Waiting up to %v for submariner engine to be created for %s...", submarinerTimeout, infraDetails[0])
+	submarinerContext, cancel := context.WithTimeout(ctx, submarinerTimeout)
+	deploymentsClient := clientset.ExtensionsV1beta1().Deployments(helm.Engine.Namespace)
+	wait.Until(func() {
+		deployments, err := deploymentsClient.List(metav1.ListOptions{LabelSelector: "app=submariner-engine"})
+		if err == nil && len(deployments.Items) > 0 {
+			for _, deploy := range deployments.Items {
+				if deploy.Status.ReadyReplicas == 1 {
+					log.Infof("✔ Submariner engine successfully deployed to %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
+					cancel()
+				} else if deploy.Status.ReadyReplicas < 1 {
+					log.Infof("Still waiting for submariner engine deployment %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
+				}
+			}
+		} else if err != nil {
+			log.Infof("Still waiting for submariner engine deployment for %s %v", infraDetails[0], err)
+		}
+	}, 10*time.Second, submarinerContext.Done())
+	err = submarinerContext.Err()
+	if err != nil && err != context.Canceled {
+		return errors.Wrapf(err, "Error waiting for submariner engine deployment %s.", infraDetails[0])
+	}
+	wg.Done()
+	return nil
+}
+
 var deploySubmarinerCmd = &cobra.Command{
 	Use:   "submariner",
 	Short: "Update submariner deployment",
@@ -217,7 +542,10 @@ var deploySubmarinerCmd = &cobra.Command{
 
 		var wg sync.WaitGroup
 
-		GetDependencies(&openshiftConfig)
+		err = GetDependencies(&openshiftConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
 
 		if EngineImage != "" {
 			helmConfig.Engine.Image.Repository = strings.Split(EngineImage, ":")[0]
@@ -233,48 +561,68 @@ var deploySubmarinerCmd = &cobra.Command{
 			log.Warn("Reinstalling submariner.")
 			err := brokercl.DeleteSubmariner(helmConfig.Broker.Namespace)
 			if err != nil {
-				log.Error(err)
+				log.Fatal(err)
 			}
 
 			for i := range clusters {
 				err := clusters[i].DeleteSubmariner(helmConfig.Engine.Namespace)
 				if err != nil {
-					log.Error(err)
+					log.Fatal(err)
 				}
 				err = clusters[i].DeleteSubmarinerCrd()
 				if err != nil {
-					log.Error(err)
-				}
-			}
-
-			HelmInit(helmConfig.HelmRepo.URL)
-			brokercl.InstallSubmarinerBroker(&helmConfig)
-
-			psk := GeneratePsk()
-
-			wg.Add(len(clusters))
-			for i := range clusters {
-				go clusters[i].InstallSubmarinerGateway(&wg, &brokercl, &helmConfig, psk)
-			}
-			wg.Wait()
-
-			wg.Add(len(clusters))
-			for i := range clusters {
-				go clusters[i].WaitForSubmarinerDeployment(&wg, &helmConfig)
-			}
-			wg.Wait()
-		} else {
-			for i := range clusters {
-				err := clusters[i].UpdateEngineDeployment(&helmConfig)
-				if err != nil {
-					log.Error(err)
-				}
-				err = clusters[i].UpdateRouteAgentDaemonSet(&helmConfig)
-				if err != nil {
-					log.Error(err)
+					log.Fatal(err)
 				}
 			}
 		}
+
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				err := cl.AddSubmarinerSecurityContext(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Fatal(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		err = HelmInit(helmConfig.HelmRepo.URL)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = brokercl.InstallSubmarinerBroker(&helmConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		psk := GeneratePsk()
+
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				err := cl.InstallSubmarinerGateway(&wg, &brokercl, &helmConfig, psk)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
+
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				err := cl.WaitForSubmarinerDeployment(&wg, &helmConfig)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
+				}
+			}(cl)
+		}
+		wg.Wait()
 	},
 }
 
@@ -299,8 +647,38 @@ var deployNetshootCmd = &cobra.Command{
 			go func(cl ClusterData) {
 				err = cl.DeployNetshootDaemonSet(&wg)
 				if err != nil {
+					defer wg.Done()
 					log.Error(err)
-					wg.Done()
+				}
+			}(cl)
+		}
+		wg.Wait()
+	},
+}
+
+var deployNginxDemoCmd = &cobra.Command{
+	Use:   "nginx-demo",
+	Short: "Deploy nginx-demo application to all clusters",
+	Run: func(cmd *cobra.Command, args []string) {
+
+		if Debug {
+			log.SetReportCaller(true)
+			log.SetLevel(log.DebugLevel)
+		}
+
+		clusters, _, _, _, err := ParseConfigFile()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(len(clusters))
+		for _, cl := range clusters {
+			go func(cl ClusterData) {
+				err = cl.DeployNginxDemo(&wg)
+				if err != nil {
+					defer wg.Done()
+					log.Error(err)
 				}
 			}(cl)
 		}
@@ -323,8 +701,9 @@ func init() {
 	rootCmd.AddCommand(deployCmd)
 	deployCmd.AddCommand(deploySubmarinerCmd)
 	deployCmd.AddCommand(deployNetshootCmd)
-	deploySubmarinerCmd.Flags().StringVarP(&EngineImage, "engine", "", "", "engine image:tag")
-	deploySubmarinerCmd.Flags().StringVarP(&RouteAgentImage, "routeagent", "", "", "route agent image:tag")
+	deployCmd.AddCommand(deployNginxDemoCmd)
+	deploySubmarinerCmd.Flags().StringVarP(&EngineImage, "engine", "", "", "engine image:tag, should be used with --reinstall")
+	deploySubmarinerCmd.Flags().StringVarP(&RouteAgentImage, "routeagent", "", "", "route agent image:tag, should be used with --reinstall")
 	deploySubmarinerCmd.Flags().BoolVarP(&Reinstall, "reinstall", "", false, "full submariner reinstall")
 	deployNetshootCmd.Flags().BoolVarP(&HostNetwork, "host-network", "", false, "deploy debug pods with host networking")
 }
