@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	secv1 "github.com/openshift/api/security/v1"
 	scc "github.com/openshift/client-go/security/clientset/versioned/typed/security/v1"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"io"
 	"io/ioutil"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -85,17 +87,21 @@ func (cl *ClusterData) DeleteSubmariner(ns string) error {
 	cmdName := "./bin/helm"
 	cmdArgs := []string{"del", "--purge", ns, "--kubeconfig", kubeConfigFile, "--debug"}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
-		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
+		log.Fatalf("Error opening file: %v", err)
 	}
 
-	err = cmd.Wait()
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil && !strings.Contains(buf.String(), "not found") {
 		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
 	}
@@ -114,24 +120,32 @@ func (cl *ClusterData) DeleteSubmarinerCrd() error {
 		return err
 	}
 
-	currentDir, _ := os.Getwd()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return errors.Wrapf(err, "%s", cl.ClusterName)
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	cmdName := "./bin/oc"
 	cmdArgs := []string{
 		"delete", "crd", "clusters.submariner.io", "endpoints.submariner.io",
 		"--config", kubeConfigFile}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
-		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
+		log.Fatalf("Error opening file: %v", err)
 	}
 
-	err = cmd.Wait()
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil && !strings.Contains(buf.String(), "not found") {
 		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
 	}
@@ -211,6 +225,12 @@ func (cl *ClusterData) UpdateRouteAgentDaemonSet(h *HelmData) error {
 func (cl *ClusterData) DeployNetshootDaemonSet(wg *sync.WaitGroup) error {
 	var dsFile string
 	currentDir, _ := os.Getwd()
+
+	infraDetails, err := cl.ExtractInfraDetails()
+	if err != nil {
+		return err
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
 	if err != nil {
@@ -228,26 +248,26 @@ func (cl *ClusterData) DeployNetshootDaemonSet(wg *sync.WaitGroup) error {
 		dsFile = filepath.Join(currentDir, "deploy/debug/netshoot-ds.yaml")
 	}
 
-	log.Debugf("Deploying netshoot daemon set %s, host network: %v.", cl.ClusterName, HostNetwork)
+	log.Debugf("Deploying netshoot daemon set %s, host network: %v.", infraDetails[0], HostNetwork)
 
 	file, err := ioutil.ReadFile(dsFile)
 	if err != nil {
-		return errors.Wrap(err, "error loading the deployment file")
+		return errors.Wrap(err, "Error loading the deployment file")
 	}
 
 	decode := scheme.Codecs.UniversalDeserializer().Decode
 	obj, _, err := decode(file, nil, nil)
 	if err != nil {
-		return errors.New(err.Error())
+		return err
 	}
 
 	_, err = clientset.AppsV1().DaemonSets("default").Create(obj.(*v1.DaemonSet))
 	if err != nil && strings.Contains(err.Error(), "already exists") {
-		log.Infof("✔ %s %s", err.Error(), cl.ClusterName)
+		log.Infof("✔ %s %s", err.Error(), infraDetails[0])
 	} else if err != nil {
-		return errors.Wrapf(err, "Failed deploy netshoot daemon set %s", cl.ClusterName)
+		return errors.Wrapf(err, "Failed deploy netshoot daemon set %s", infraDetails[0])
 	} else {
-		log.Infof("✔ Netshoot daemon set for %s was deployed.", cl.ClusterName)
+		log.Infof("✔ Netshoot daemon set for %s was deployed.", infraDetails[0])
 	}
 	wg.Done()
 	return nil
@@ -332,7 +352,11 @@ func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
 		return err
 	}
 
-	currentDir, _ := os.Getwd()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return errors.Wrapf(err, "%s", cl.ClusterName)
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	cmdName := "./bin/helm"
 	cmdArgs := []string{
@@ -342,17 +366,21 @@ func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
 		"--kubeconfig", kubeConfigFile,
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
-		return errors.Wrapf(err, "Error starting helm: %s\n%s", infraDetails[0], buf.String())
+		log.Fatalf("Error opening file: %v", err)
 	}
 
-	err = cmd.Wait()
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil && !strings.Contains(buf.String(), "already exists") {
 		return errors.Wrapf(err, "Error waiting for helm: %s\n%s", infraDetails[0], buf.String())
 	}
@@ -362,6 +390,44 @@ func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
 	}).Debugf("%s %s", infraDetails[0], buf.String())
 	log.Infof("✔ Broker was installed on %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
 	return nil
+}
+
+//Export submariner broker ca and token
+func (cl *ClusterData) ExportBrokerSecretData() (map[string][]byte, error) {
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	saClient := clientset.CoreV1().Secrets("submariner-k8s-broker")
+
+	saList, err := saClient.List(metav1.ListOptions{FieldSelector: "type=kubernetes.io/service-account-token"})
+	if err == nil && len(saList.Items) > 0 {
+		for _, sa := range saList.Items {
+			if strings.Contains(sa.Name, "submariner-k8s-broker-client-token") {
+				b := new(bytes.Buffer)
+				for key, value := range sa.Annotations {
+					_, _ = fmt.Fprintf(b, "%s=\"%s\"\n", key, value)
+				}
+				if !strings.Contains(b.String(), "openshift.io") {
+					log.Debugf("Getting data for %s %s", sa.Name, cl.ClusterName)
+					return sa.Data, nil
+				}
+			}
+		}
+	} else {
+		log.Errorf("Could not get broker token for %s", cl.ClusterName)
+	}
+	return nil, nil
 }
 
 //Install submariner gateway
@@ -427,10 +493,19 @@ func (cl *ClusterData) InstallSubmarinerGateway(wg *sync.WaitGroup, broker *Clus
 		"--set", strings.Join(setArgs, ","),
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
 	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
 
 	err = cmd.Start()
 	if err != nil {

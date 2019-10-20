@@ -223,12 +223,7 @@ func TerraformInit() error {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
-	err := cmd.Start()
-	if err != nil {
-		return errors.Wrapf(err, "Error starting terraform init: \n%s", buf.String())
-	}
-
-	err = cmd.Wait()
+	err := cmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "Error waiting for terraform init: \n%s", buf.String())
 	}
@@ -274,7 +269,7 @@ func GetDependencies(v *OpenshiftData) error {
 	}
 
 	if _, err := os.Stat("./bin/terraform"); os.IsNotExist(err) {
-		err = DownloadFile("https://releases.hashicorp.com/terraform/0.12.9/terraform_0.12.9_linux_amd64.zip", "./tmp/terraform.zip", "terraform")
+		err = DownloadFile("https://releases.hashicorp.com/terraform/0.12.12/terraform_0.12.12_linux_amd64.zip", "./tmp/terraform.zip", "terraform")
 		if err != nil {
 			return err
 		}
@@ -317,7 +312,6 @@ func GetDependencies(v *OpenshiftData) error {
 			return errors.Wrapf(err, "Error waiting openshift-install: \n%s", buf.String())
 		}
 
-		// TODO issue with 4.2 as openshift-install version command does not contain the 4.2 version forces tool to be re downloaded each time.
 		if strings.Contains(buf.String(), shortVersion) {
 			log.Debugf("OCP tools with version %s already exist.", shortVersion)
 		} else {
@@ -333,7 +327,7 @@ func GetDependencies(v *OpenshiftData) error {
 
 //Get openshift install and client binaries
 func GetOcpTools(version string) error {
-	url := "https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview" + "/" + version + "/openshift-install-linux-" + version + ".tar.gz"
+	url := "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/" + version + "/openshift-install-linux-" + version + ".tar.gz"
 	err := DownloadFile(url, "./tmp/openshift-install-linux-"+version+".tar.gz", "openshift-install")
 	if err != nil {
 		return err
@@ -346,7 +340,7 @@ func GetOcpTools(version string) error {
 		return err
 	}
 
-	url = "https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview" + "/" + version + "/openshift-client-linux-" + version + ".tar.gz"
+	url = "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/" + version + "/openshift-client-linux-" + version + ".tar.gz"
 	err = DownloadFile(url, "./tmp/openshift-client-linux-"+version+".tar.gz", "oc")
 	if err != nil {
 		return err
@@ -403,12 +397,8 @@ func ModifyKubeConfigFiles(cls []ClusterData) error {
 	return nil
 }
 
+//Generate config files
 func GenerateConfigs(cl ClusterData, auth *AuthData) error {
-	return GenerateConfigDirs(cl, auth)
-}
-
-//Generate config dirs
-func GenerateConfigDirs(cl ClusterData, auth *AuthData) error {
 	currentDir, _ := os.Getwd()
 
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
@@ -418,14 +408,6 @@ func GenerateConfigDirs(cl ClusterData, auth *AuthData) error {
 	}
 
 	log.Debugf("ClustersConfig directories for %s created.", cl.ClusterName)
-
-	return GenerateConfigFiles(cl, auth)
-}
-
-//Generate config files
-func GenerateConfigFiles(cl ClusterData, auth *AuthData) error {
-
-	currentDir, _ := os.Getwd()
 
 	c, err := user.Current()
 	if err != nil {
@@ -547,12 +529,12 @@ func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error)
 	return cls, auth, helm, openshift, nil
 }
 
-func (cl *ClusterData) WaitForPublicGatewayNodesAws(wg *sync.WaitGroup) error {
+func (cl *ClusterData) WaitForPublicGatewayNodesAws() error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
-	log.Infof("Waiting up to for submariner gateway nodes to be running on AWS for %s, platform: %s, type %s.", infraDetails[0], cl.Platform.Name, cl.ClusterType)
+	log.Infof("Waiting up to for submariner gateway nodes to be running on AWS for %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
 
 	sess, err := session.NewSession(&aws.Config{Region: aws.String(cl.Platform.Region)})
 	if err != nil {
@@ -610,7 +592,7 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws(wg *sync.WaitGroup) error {
 			if err != nil {
 				return errors.Wrapf(err, "%s", infraDetails[0])
 			}
-			log.Debugf("Submariner gateway node %s AWS status is ok %s.", *instance.InstanceId, infraDetails[0])
+			log.Debugf("✔ Submariner gateway node %s AWS status is ok %s.", *instance.InstanceId, infraDetails[0])
 
 			ctx := context.Background()
 			currentDir, _ := os.Getwd()
@@ -635,9 +617,10 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws(wg *sync.WaitGroup) error {
 					for _, status := range node.Status.Conditions {
 						if status.Type == "Ready" {
 							if status.Status == "True" {
-								log.Infof("Submariner gateway node %s is ready for %s.", *instance.PrivateDnsName, infraDetails[0])
+								log.Infof("✔ Submariner gateway node %s is ready for %s.", *instance.PrivateDnsName, infraDetails[0])
 								cancel()
-								wg.Done()
+							} else {
+								log.Infof("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
 							}
 						}
 					}
@@ -655,7 +638,7 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws(wg *sync.WaitGroup) error {
 }
 
 //Label private cluster gateway nodes as submariner gateway
-func (cl *ClusterData) PreparePrivateCluster(wg *sync.WaitGroup) error {
+func (cl *ClusterData) PreparePrivateCluster() error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
@@ -681,7 +664,7 @@ func (cl *ClusterData) PreparePrivateCluster(wg *sync.WaitGroup) error {
 	}
 
 	for i := 1; i <= cl.NumGateways; i++ {
-		err = cl.LabelGatewayNode(nodes.Items[i].Name)
+		err = cl.LabelPrivateGatewayNode(nodes.Items[i].Name)
 		if err != nil {
 			return errors.Wrapf(err, "%s", infraDetails[0])
 		}
@@ -762,11 +745,10 @@ func (cl *ClusterData) PreparePrivateCluster(wg *sync.WaitGroup) error {
 			return errors.Errorf("Worker security group not found for %s, platform: %s, type: %s.", infraDetails[0], cl.Platform.Name, cl.ClusterType)
 		}
 	}
-	wg.Done()
 	return nil
 }
 
-func (cl *ClusterData) LabelGatewayNode(gw string) error {
+func (cl *ClusterData) LabelPrivateGatewayNode(gw string) error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
@@ -798,44 +780,6 @@ func (cl *ClusterData) LabelGatewayNode(gw string) error {
 	return nil
 }
 
-//Export submariner broker ca and token
-func (cl *ClusterData) ExportBrokerSecretData() (map[string][]byte, error) {
-	currentDir, _ := os.Getwd()
-	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
-	if err != nil {
-		log.Error(err.Error())
-		return nil, err
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Error(err.Error())
-		return nil, err
-	}
-
-	saClient := clientset.CoreV1().Secrets("submariner-k8s-broker")
-
-	saList, err := saClient.List(metav1.ListOptions{FieldSelector: "type=kubernetes.io/service-account-token"})
-	if err == nil && len(saList.Items) > 0 {
-		for _, sa := range saList.Items {
-			if strings.Contains(sa.Name, "submariner-k8s-broker-client-token") {
-				b := new(bytes.Buffer)
-				for key, value := range sa.Annotations {
-					_, _ = fmt.Fprintf(b, "%s=\"%s\"\n", key, value)
-				}
-				if !strings.Contains(b.String(), "openshift.io") {
-					log.Debugf("Getting data for %s %s", sa.Name, cl.ClusterName)
-					return sa.Data, nil
-				}
-			}
-		}
-	} else {
-		log.Errorf("Could not get broker token for %s", cl.ClusterName)
-	}
-	return nil, nil
-}
-
 //Extract infra details from metadata.json
 func (cl *ClusterData) ExtractInfraDetails() ([]string, error) {
 	currentDir, _ := os.Getwd()
@@ -861,14 +805,14 @@ func (cl *ClusterData) ExtractInfraDetails() ([]string, error) {
 }
 
 // Create OCP4 cluster using IPI
-func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, wg *sync.WaitGroup) error {
+func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, auth *AuthData, wg *sync.WaitGroup) error {
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
-	log.Infof("Creating cluster %s platform: %s, type: %s. Detailed log: %s", cl.ClusterName, cl.Platform.Name, cl.ClusterType, configDir+"/.openshift_install.log")
+	log.Infof("Creating cluster %s type: %s, platform: %s. Detailed log: %s", cl.ClusterName, cl.ClusterType, cl.Platform.Name, configDir+"/.openshift_install.log")
 	cmdName := "./bin/openshift-install"
 	cmdArgs := []string{"create", "cluster", "--dir", configDir, "--log-level", "debug"}
 
@@ -877,28 +821,69 @@ func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, wg *sync.WaitGroup) er
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
-	err = cmd.Start()
-	if err != nil {
-		return errors.Wrapf(err, "Error starting installation: %s. Detailed log: %s", cl.ClusterName, configDir+"/.openshift_install.log")
-	}
-
-	err = cmd.Wait()
+	err = cmd.Run()
 	if err != nil && strings.Contains(buf.String(), "already exists") {
 		log.Debugf("✔ %s %s", err.Error(), cl.ClusterName)
 	} else if err != nil {
 		return errors.Wrapf(err, "Error waiting for installation completion: %s platform: %s. Detailed log: %s", cl.ClusterName, cl.Platform.Name, configDir+"/.openshift_install.log")
 	}
 
-	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
-	}).Debugf("%s %s", cl.ClusterName, buf.String())
-
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
 
+	log.WithFields(log.Fields{
+		"cluster": infraDetails[0],
+	}).Debugf("%s %s", infraDetails[0], buf.String())
+
 	log.Infof("✔ Openshift was installed on %s platform: %s, type: %s, clusterID: %s.", cl.ClusterName, cl.Platform.Name, cl.ClusterType, infraDetails[0])
+
+	switch cl.Platform.Name {
+	case "aws":
+		if cl.ClusterType == "public" {
+
+			err = cl.CreatePublicIpiResourcesAws()
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+
+			err = cl.DeployPublicMachineSetConfigAws()
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+
+			err = cl.WaitForPublicGatewayNodesAws()
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+
+		} else {
+			err = cl.PreparePrivateCluster()
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+		}
+	case "openstack":
+		if cl.ClusterType == "public" {
+			return errors.New("Public openstack clusters are not supported!")
+		} else {
+			err = cl.PreparePrivateCluster()
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+
+			err = cl.CreateAppsDnsRecordsOsp(auth)
+			if err != nil {
+				return errors.Wrapf(err, "%s", infraDetails[0])
+			}
+		}
+	}
+
+	err = cl.CreateTillerDeployment()
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
 	wg.Done()
 	return nil
 }
@@ -917,7 +902,7 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) (string, error) {
 		infraId = c.Username + "-" + cl.ClusterName
 	}
 
-	log.Infof("Creating api DNS records for %s platform: %s, type: %s.", cl.ClusterName, cl.Platform.Name, cl.ClusterType)
+	log.Infof("Creating api DNS records for %s type: %s, platform: %s.", cl.ClusterName, cl.ClusterType, cl.Platform.Name)
 	cmdName := "./bin/terraform"
 	cmdArgs := []string{
 		"apply", "-target", "module." + cl.ClusterName + "-osp-dns",
@@ -935,17 +920,26 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) (string, error) {
 		"-auto-approve",
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	currentDir, err := os.Getwd()
 	if err != nil {
-		return "", errors.Wrapf(err, "Error starting terraform: %s\n %s", cl.ClusterName, buf.String())
+		return "", errors.Wrapf(err, "%s", cl.ClusterName)
 	}
 
-	err = cmd.Wait()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil {
 		return "", errors.Wrapf(err, "Error waiting for dns records creation: %s\n %s", cl.ClusterName, buf.String())
 	}
@@ -963,7 +957,7 @@ func (cl *ClusterData) CreateApiDnsRecordsOsp(a *AuthData) (string, error) {
 }
 
 //Run apps dns creation terraform osp module
-func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) error {
+func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData) error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
@@ -987,17 +981,26 @@ func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) 
 		"-auto-approve",
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	currentDir, err := os.Getwd()
 	if err != nil {
-		return errors.Wrapf(err, "Error starting terraform: %s\n %s", infraDetails[0], buf.String())
+		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
 
-	err = cmd.Wait()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "Error waiting for security group rules creation: %s\n %s", infraDetails[0], buf.String())
 	}
@@ -1008,18 +1011,21 @@ func (cl *ClusterData) CreateAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup) 
 
 	output := strings.Split(buf.String(), "\n")
 	log.Infof("✔ Security group rules and DNS records were created for %s. %s", infraDetails[0], output[len(output)-2])
-	wg.Done()
 	return nil
 }
 
 // Deploy MachineSet config for submariner gateway nodes
-func (cl *ClusterData) DeployPublicMachineSetConfigAws(wg *sync.WaitGroup) error {
+func (cl *ClusterData) DeployPublicMachineSetConfigAws() error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
 
-	currentDir, _ := os.Getwd()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
 	machineSetConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, infraDetails[0]+"-submariner-gw-machine-set.yaml")
 	cmdName := "./bin/oc"
@@ -1027,10 +1033,19 @@ func (cl *ClusterData) DeployPublicMachineSetConfigAws(wg *sync.WaitGroup) error
 		"apply", "-f", machineSetConfigFile, "--kubeconfig", kubeConfigFile,
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
 	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
 
 	err = cmd.Start()
 	if err != nil {
@@ -1043,15 +1058,14 @@ func (cl *ClusterData) DeployPublicMachineSetConfigAws(wg *sync.WaitGroup) error
 	}
 
 	log.WithFields(log.Fields{
-		"cluster": cl.ClusterName,
+		"cluster": infraDetails[0],
 	}).Debugf("%s %s", infraDetails[0], buf.String())
 	log.Infof("✔ Submariner gateway MachineSet was deployed to %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
-	wg.Done()
 	return nil
 }
 
 // Modify AWS IPI infrastructure
-func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
+func (cl *ClusterData) CreatePublicIpiResourcesAws() error {
 
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
@@ -1069,10 +1083,24 @@ func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 		"-auto-approve",
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
 	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
 
 	err = cmd.Start()
 	if err != nil {
@@ -1090,12 +1118,11 @@ func (cl *ClusterData) CreatePublicIpiResourcesAws(wg *sync.WaitGroup) error {
 
 	output := strings.Split(buf.String(), "\n")
 	log.Infof("✔ AWS IPI modifications were applied for %s type: %s, platform: %s. %s", infraDetails[0], cl.ClusterType, cl.Platform.Name, output[len(output)-2])
-	wg.Done()
 	return nil
 }
 
 // Create tiller deployment
-func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
+func (cl *ClusterData) CreateTillerDeployment() error {
 	infraDetails, err := cl.ExtractInfraDetails()
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
@@ -1200,7 +1227,6 @@ func (cl *ClusterData) CreateTillerDeployment(wg *sync.WaitGroup) error {
 			return errors.Wrapf(err, "Error waiting for tiller deployment %s", infraDetails[0])
 		}
 	}
-	wg.Done()
 	return nil
 }
 
@@ -1217,28 +1243,6 @@ var clusterCmd = &cobra.Command{
 		clusters, authConfig, _, openshiftConfig, err := ParseConfigFile()
 		if err != nil {
 			log.Fatal(err)
-		}
-
-		var openstackcls []ClusterData
-		var publicawscls []ClusterData
-		var privatecls []ClusterData
-
-		for _, cl := range clusters {
-			switch cl.Platform.Name {
-			case "openstack":
-				openstackcls = append(openstackcls, cl)
-			}
-		}
-
-		for _, cl := range clusters {
-			switch cl.ClusterType {
-			case "public":
-				if cl.Platform.Name == "aws" {
-					publicawscls = append(publicawscls, cl)
-				}
-			case "private":
-				privatecls = append(privatecls, cl)
-			}
 		}
 
 		err = GetDependencies(&openshiftConfig)
@@ -1263,7 +1267,7 @@ var clusterCmd = &cobra.Command{
 		wg.Add(len(clusters))
 		for _, cl := range clusters {
 			go func(cl ClusterData) {
-				err := cl.CreateOcpCluster(&openshiftConfig, &wg)
+				err := cl.CreateOcpCluster(&openshiftConfig, &authConfig, &wg)
 				if err != nil {
 					defer wg.Done()
 					log.Fatal(err)
@@ -1272,78 +1276,7 @@ var clusterCmd = &cobra.Command{
 		}
 		wg.Wait()
 
-		wg.Add(len(openstackcls))
-		for _, cl := range openstackcls {
-			go func(cl ClusterData) {
-				err := cl.CreateAppsDnsRecordsOsp(&authConfig, &wg)
-				if err != nil {
-					defer wg.Done()
-					log.Fatal(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-
-		wg.Add(len(privatecls))
-		for _, cl := range privatecls {
-			go func(cl ClusterData) {
-				err := cl.PreparePrivateCluster(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Fatal(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-
-		wg.Add(len(clusters))
-		for _, cl := range clusters {
-			go func(cl ClusterData) {
-				err := cl.CreateTillerDeployment(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Fatal(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-
-		wg.Add(len(publicawscls))
-		for _, cl := range publicawscls {
-			go func(cl ClusterData) {
-				err := cl.CreatePublicIpiResourcesAws(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Error(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-
-		wg.Add(len(publicawscls))
-		for _, cl := range publicawscls {
-			go func(cl ClusterData) {
-				err := cl.DeployPublicMachineSetConfigAws(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Fatal(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-
-		wg.Add(len(publicawscls))
-		for _, cl := range publicawscls {
-			go func(cl ClusterData) {
-				err := cl.WaitForPublicGatewayNodesAws(&wg)
-				if err != nil {
-					defer wg.Done()
-					log.Fatal(err)
-				}
-			}(cl)
-		}
-		wg.Wait()
-		log.Infof("Installation completed successfully! The clusters are ready for submariner installation. [ocpup deploy submariner]")
+		log.Infof("✔ Installation completed successfully! The clusters are ready for submariner installation. [ocpup deploy submariner]")
 	},
 }
 
