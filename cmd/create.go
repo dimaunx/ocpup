@@ -17,12 +17,13 @@ import (
 	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
+	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"math/rand"
 	"net/http"
@@ -1036,7 +1037,7 @@ func (cl *ClusterData) DeployPublicMachineSetConfigAws() error {
 	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
 	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
-		log.Fatalf("Error opening file: %v", err)
+		return errors.Wrapf(err, "Error opening file: ")
 	}
 
 	defer f.Close()
@@ -1127,14 +1128,13 @@ func (cl *ClusterData) CreateTillerDeployment() error {
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
-	log.Infof("Creating tiller deployment for %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
 
-	currentDir, _ := os.Getwd()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return errors.Wrapf(err, "%s", infraDetails[0])
+	}
+
 	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-
-	saFile := filepath.Join(currentDir, "deploy/tiller/serviceaccount.json")
-	roleFile := filepath.Join(currentDir, "deploy/tiller/clusterrolebinding.json")
-	deployFile := filepath.Join(currentDir, "deploy/tiller/tillerdeploy.json")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
@@ -1145,86 +1145,83 @@ func (cl *ClusterData) CreateTillerDeployment() error {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
 
-	file, err := os.Open(saFile)
+	log.Infof("Creating tiller deployment for %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
+
+	tillerFile := filepath.Join(currentDir, "deploy/tiller/tiller.yaml")
+	file, err := ioutil.ReadFile(tillerFile)
 	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	}
-	dec := json.NewDecoder(file)
-
-	var sa corev1.ServiceAccount
-	err = dec.Decode(&sa)
-	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
+		return errors.Wrapf(err, "Error reading tiller deployment file %s", infraDetails[0])
 	}
 
-	saResult, err := clientset.CoreV1().ServiceAccounts("kube-system").Create(&sa)
-	if err != nil && strings.Contains(err.Error(), "already exists") {
-		log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
-	} else if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	} else {
-		log.Debugf("✔ Tiller service account created for %s at: %s", infraDetails[0], saResult.CreationTimestamp)
-	}
+	acceptedK8sTypes := regexp.MustCompile(`(ServiceAccount|ClusterRoleBinding|Deployment)`)
+	fileAsString := string(file[:])
+	sepYamlfiles := strings.Split(fileAsString, "---")
+	for _, f := range sepYamlfiles {
+		if f == "\n" || f == "" {
+			// ignore empty cases
+			continue
+		}
 
-	file, err = os.Open(roleFile)
-	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	}
-	dec = json.NewDecoder(file)
+		decode := scheme.Codecs.UniversalDeserializer().Decode
+		obj, groupVersionKind, err := decode([]byte(f), nil, nil)
 
-	var crb rbacv1.ClusterRoleBinding
-	err = dec.Decode(&crb)
-	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	}
+		if err != nil {
+			return errors.Wrap(err, "Error while decoding YAML object. Err was: ")
+		}
 
-	crbResult, err := clientset.RbacV1().ClusterRoleBindings().Create(&crb)
-	if err != nil && strings.Contains(err.Error(), "already exists") {
-		log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
-	} else if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	} else {
-		log.Debugf("✔ Tiller cluster role binding created for %s at: %s", infraDetails[0], crbResult.CreationTimestamp)
-	}
-
-	file, err = os.Open(deployFile)
-	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	}
-	dec = json.NewDecoder(file)
-
-	var dep extensionsv1beta1.Deployment
-	err = dec.Decode(&dep)
-	if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	}
-
-	deploymentsClient := clientset.ExtensionsV1beta1().Deployments("kube-system")
-
-	_, err = deploymentsClient.Create(&dep)
-	if err != nil && strings.Contains(err.Error(), "already exists") {
-		log.Infof("✔ %s for %s.", err.Error(), infraDetails[0])
-	} else if err != nil {
-		return errors.Wrapf(err, "%s", infraDetails[0])
-	} else {
-		ctx := context.Background()
-		tillerTimeout := 5 * time.Minute
-		log.Infof("Waiting up to %v for tiller to be created %s...", tillerTimeout, infraDetails[0])
-		tillerContext, cancel := context.WithTimeout(ctx, tillerTimeout)
-		wait.Until(func() {
-			tillerDeployment, err := clientset.ExtensionsV1beta1().Deployments("kube-system").Get("tiller-deploy", metav1.GetOptions{})
-			if err == nil && tillerDeployment.Status.ReadyReplicas > 0 {
-				if tillerDeployment.Status.ReadyReplicas == 1 {
-					log.Infof("✔ Tiller successfully deployed to %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
-					cancel()
+		if !acceptedK8sTypes.MatchString(groupVersionKind.Kind) {
+			log.Warnf("The file %s contains K8s object types which are not supported! Skipping object with type: %s", tillerFile, groupVersionKind.Kind)
+		} else {
+			switch o := obj.(type) {
+			case *corev1.ServiceAccount:
+				result, err := clientset.CoreV1().ServiceAccounts("kube-system").Create(o)
+				if err != nil && strings.Contains(err.Error(), "already exists") {
+					log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
+				} else if err != nil {
+					return err
 				} else {
-					log.Infof("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+					log.Debugf("✔ Tiler service account was created for %s at: %s", infraDetails[0], result.CreationTimestamp)
+				}
+			case *rbacv1.ClusterRoleBinding:
+				result, err := clientset.RbacV1().ClusterRoleBindings().Create(o)
+				if err != nil && strings.Contains(err.Error(), "already exists") {
+					log.Debugf("✔ %s %s", err.Error(), infraDetails[0])
+				} else if err != nil {
+					return errors.Wrapf(err, "%s", infraDetails[0])
+				} else {
+					log.Debugf("✔ Tiller cluster role binding created for %s at: %s", infraDetails[0], result.CreationTimestamp)
+				}
+			case *v1.Deployment:
+				_, err := clientset.AppsV1().Deployments("kube-system").Create(o)
+				if err != nil && strings.Contains(err.Error(), "already exists") {
+					log.Infof("✔ %s %s", err.Error(), infraDetails[0])
+				} else if err != nil {
+					return errors.Wrapf(err, "%s", infraDetails[0])
+				} else {
+					ctx := context.Background()
+					tillerTimeout := 5 * time.Minute
+					log.Infof("Waiting up to %v for tiller to be created %s...", tillerTimeout, infraDetails[0])
+					tillerContext, cancel := context.WithTimeout(ctx, tillerTimeout)
+					wait.Until(func() {
+						tillerDeployment, err := clientset.ExtensionsV1beta1().Deployments("kube-system").Get("tiller-deploy", metav1.GetOptions{})
+						if err == nil && tillerDeployment.Status.ReadyReplicas > 0 {
+							if tillerDeployment.Status.ReadyReplicas == 1 {
+								log.Infof("✔ Tiller successfully deployed to %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+								cancel()
+							} else {
+								log.Infof("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+							}
+						} else {
+							log.Infof("Still waiting for tiller deployment for %s.", infraDetails[0])
+						}
+					}, 30*time.Second, tillerContext.Done())
+
+					err = tillerContext.Err()
+					if err != nil && err != context.Canceled {
+						return errors.Wrapf(err, "Error waiting for tiller deployment %s", infraDetails[0])
+					}
 				}
 			}
-		}, 30*time.Second, tillerContext.Done())
-		err = tillerContext.Err()
-		if err != nil && err != context.Canceled {
-			return errors.Wrapf(err, "Error waiting for tiller deployment %s", infraDetails[0])
 		}
 	}
 	return nil
