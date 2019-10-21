@@ -5,6 +5,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -44,17 +45,26 @@ func (cl *ClusterData) DestroyApiDnsRecordsOsp(v *OpenshiftData, a *AuthData, wg
 		"-auto-approve",
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	currentDir, err := os.Getwd()
 	if err != nil {
-		return errors.Wrapf(err, "Error starting terraform: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "%s", cl.ClusterName)
 	}
 
-	err = cmd.Wait()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "Error waiting for resources destruction: %s\n%s", cl.ClusterName, buf.String())
 	}
@@ -93,17 +103,26 @@ func (cl *ClusterData) DestroyAppsDnsRecordsOsp(a *AuthData, wg *sync.WaitGroup)
 		"-auto-approve",
 	}
 
-	cmd := exec.Command(cmdName, cmdArgs...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-
-	err = cmd.Start()
+	currentDir, err := os.Getwd()
 	if err != nil {
-		return errors.Wrapf(err, "Error starting terraform: %s\n%s", cl.ClusterName, buf.String())
+		return errors.Wrapf(err, "%s", cl.ClusterName)
 	}
 
-	err = cmd.Wait()
+	logFile := filepath.Join(currentDir, ".config", cl.ClusterName, ".openshift_install.log")
+	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+
+	defer f.Close()
+	buf := &bytes.Buffer{}
+	mwriter := io.MultiWriter(f, buf)
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdout = mwriter
+	cmd.Stderr = mwriter
+
+	err = cmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "Error waiting for resources deletion: %s\n%s", cl.ClusterName, buf.String())
 	}
@@ -130,12 +149,7 @@ func (cl *ClusterData) DestroyCluster(wg *sync.WaitGroup) error {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 
-	err := cmd.Start()
-	if err != nil {
-		return errors.Wrapf(err, "Error starting deletion: %s\n%s", cl.ClusterName, buf.String())
-	}
-
-	err = cmd.Wait()
+	err := cmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "Error waiting for deletion: %s\n%s", cl.ClusterName, buf.String())
 	}
@@ -165,8 +179,6 @@ func (cl *ClusterData) DestroyCluster(wg *sync.WaitGroup) error {
 			return err
 		}
 	}
-
-	_ = os.Remove(filepath.Join(currentDir, "clouds.yaml"))
 
 	err = os.RemoveAll(filepath.Join(currentDir, ".config", cl.ClusterName))
 	if err != nil {
@@ -240,7 +252,7 @@ var destroyClustersCmd = &cobra.Command{
 				err := cl.DestroyCluster(&wg)
 				if err != nil {
 					defer wg.Done()
-					log.Error(err)
+					log.Fatal(err)
 				}
 			}(cl)
 		}
