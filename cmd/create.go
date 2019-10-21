@@ -535,7 +535,7 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws() error {
 	if err != nil {
 		return errors.Wrapf(err, "%s", infraDetails[0])
 	}
-	log.Infof("Waiting up to for submariner gateway nodes to be running on AWS for %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
+	log.Infof("Waiting for submariner gateway nodes to be running on AWS for %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
 
 	sess, err := session.NewSession(&aws.Config{Region: aws.String(cl.Platform.Region)})
 	if err != nil {
@@ -593,7 +593,7 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws() error {
 			if err != nil {
 				return errors.Wrapf(err, "%s", infraDetails[0])
 			}
-			log.Debugf("✔ Submariner gateway node %s AWS status is ok %s.", *instance.InstanceId, infraDetails[0])
+			log.Infof("✔ Submariner gateway node %s AWS status is ok for %s.", *instance.InstanceId, infraDetails[0])
 
 			ctx := context.Background()
 			currentDir, _ := os.Getwd()
