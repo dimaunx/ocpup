@@ -344,6 +344,44 @@ func (cl ClusterData) DeployNginxDemo(wg *sync.WaitGroup) error {
 	return nil
 }
 
+//Export submariner broker ca and token
+func (cl *ClusterData) ExportBrokerSecretData() (map[string][]byte, error) {
+	currentDir, _ := os.Getwd()
+	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	if err != nil {
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	saClient := clientset.CoreV1().Secrets("submariner-k8s-broker")
+
+	saList, err := saClient.List(metav1.ListOptions{FieldSelector: "type=kubernetes.io/service-account-token"})
+	if err == nil && len(saList.Items) > 0 {
+		for _, sa := range saList.Items {
+			if strings.Contains(sa.Name, "submariner-k8s-broker-client-token") {
+				b := new(bytes.Buffer)
+				for key, value := range sa.Annotations {
+					_, _ = fmt.Fprintf(b, "%s=\"%s\"\n", key, value)
+				}
+				if !strings.Contains(b.String(), "openshift.io") {
+					log.Debugf("Getting data for %s %s", sa.Name, cl.ClusterName)
+					return sa.Data, nil
+				}
+			}
+		}
+	} else {
+		log.Errorf("Could not get broker token for %s", cl.ClusterName)
+	}
+	return nil, nil
+}
+
 //Install submariner broker
 func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
 
@@ -390,44 +428,6 @@ func (cl *ClusterData) InstallSubmarinerBroker(h *HelmData) error {
 	}).Debugf("%s %s", infraDetails[0], buf.String())
 	log.Infof("✔ Broker was installed on %s, type: %s, platform: %s.", infraDetails[0], cl.ClusterType, cl.Platform.Name)
 	return nil
-}
-
-//Export submariner broker ca and token
-func (cl *ClusterData) ExportBrokerSecretData() (map[string][]byte, error) {
-	currentDir, _ := os.Getwd()
-	kubeConfigFile := filepath.Join(currentDir, ".config", cl.ClusterName, "auth", "kubeconfig")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
-	if err != nil {
-		log.Error(err.Error())
-		return nil, err
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Error(err.Error())
-		return nil, err
-	}
-
-	saClient := clientset.CoreV1().Secrets("submariner-k8s-broker")
-
-	saList, err := saClient.List(metav1.ListOptions{FieldSelector: "type=kubernetes.io/service-account-token"})
-	if err == nil && len(saList.Items) > 0 {
-		for _, sa := range saList.Items {
-			if strings.Contains(sa.Name, "submariner-k8s-broker-client-token") {
-				b := new(bytes.Buffer)
-				for key, value := range sa.Annotations {
-					_, _ = fmt.Fprintf(b, "%s=\"%s\"\n", key, value)
-				}
-				if !strings.Contains(b.String(), "openshift.io") {
-					log.Debugf("Getting data for %s %s", sa.Name, cl.ClusterName)
-					return sa.Data, nil
-				}
-			}
-		}
-	} else {
-		log.Errorf("Could not get broker token for %s", cl.ClusterName)
-	}
-	return nil, nil
 }
 
 //Install submariner gateway
@@ -643,7 +643,6 @@ var deploySubmarinerCmd = &cobra.Command{
 		}
 
 		var wg sync.WaitGroup
-
 		err = GetDependencies(&openshiftConfig)
 		if err != nil {
 			log.Fatal(err)
