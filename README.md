@@ -96,6 +96,10 @@ helm:
     image:
       repository: quay.io/submariner/submariner-route-agent
       tag: latest
+operator:
+  submarinerTag: latest
+  submarinerRepo: quay.io/submariner
+  operatorTag: 0.0.1
 authentication:
   pullSecret: '{"auths"...}'
   sshKey: ssh-rsa xxx
@@ -121,6 +125,9 @@ Important config variables:
 | region          | OSP or AWS region name.                                                                                                   | 
 | clusterType     | AWS clusters can be private or public, openstack clusters can be only private. Only one public cluster is required.       | 
 | numGateways     | The number of worker nodes to tag as submariner gateway. Should be lower or equals to numWorkers.                         | 
+| submarinerTag   | Submariner image tag for engine and route agent.                                                                          | 
+| operatorTag     | Submariner operator tag.                                                                                                  | 
+| submarinerRepo  | Submariner image repository name, submariner and submariner-route-agent will be added to the repo name by the operator.   | 
 
 
 If one of the clusters is an Openstack cluster, the following parameters must be set under authentication/openstack:
@@ -154,7 +161,7 @@ The example ocpup.yaml config will create the following setup:
 | Cluster Name | Type                            | Machine CIDR   | Service CIDR  | Pods CIDR     | DNS Suffix                                |
 |:-------------|:--------------------------------|:---------------|:--------------|:--------------|:------------------------------------------|
 | cl1          | AWS Broker + Gateway IPI public | 10.164.0.0/16  | 100.94.0.0/16 | 10.244.0.0/14 | **username**-cl1.devcluster.openshift.com |
-| cl2          | AWS Gateway IPI public         | 10.165.0.0/16  | 100.95.0.0/16 | 10.248.0.0/14 | **username**-cl2.devcluster.openshift.com |
+| cl2          | AWS Gateway IPI public          | 10.165.0.0/16  | 100.95.0.0/16 | 10.248.0.0/14 | **username**-cl2.devcluster.openshift.com |
 | cl3          | OSP Gateway IPI private         | 10.166.0.0/16  | 100.96.0.0/16 | 10.252.0.0/14 | **username**-cl3.devcluster.openshift.com |
 
 **username** is the current user that executes the tool.
@@ -162,7 +169,7 @@ The example ocpup.yaml config will create the following setup:
 The config must include at least two clusters and one of the clusters must have **submarinerType=broker** set. 
 The broker cluster will also operate as a gateway cluster. 
 
-## Deploy Submariner with helm:
+## Deploy Submariner with operator:
 
 After **ocpup create clusters** is complete.
 ```bash
@@ -173,13 +180,6 @@ Reinstall submariner with values from config file, the image values will be read
 ```bash
 ocpup deploy submariner --reinstall
 ```
-
-Reinstall submariner with image values from command line.
-```bash
-ocpup deploy submariner --engine rancher/submariner:v0.0.2 --routeagent rancher/submariner-route-agent:v0.0.2 --reinstall
-```
-
-If any of the arguments is omitted the values will be taken from ocpup.yaml config file.
 
 ## Deploy debug pods 
 
