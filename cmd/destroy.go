@@ -203,18 +203,18 @@ var destroyClustersCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
-		clusters, authConfig, _, openshiftConfig, err := ParseConfigFile()
+		config, err := ParseConfigFile()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		err = GetDependencies(&openshiftConfig)
+		err = GetDependencies(&config.Openshift)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		var openstackcls []ClusterData
-		for _, cl := range clusters {
+		for _, cl := range config.Clusters {
 			switch cl.Platform.Name {
 			case "openstack":
 				openstackcls = append(openstackcls, cl)
@@ -225,7 +225,7 @@ var destroyClustersCmd = &cobra.Command{
 		wg.Add(len(openstackcls))
 		for _, cl := range openstackcls {
 			go func(cl ClusterData) {
-				err := cl.DestroyApiDnsRecordsOsp(&openshiftConfig, &authConfig, &wg)
+				err := cl.DestroyApiDnsRecordsOsp(&config.Openshift, &config.Authentication, &wg)
 				if err != nil {
 					defer wg.Done()
 					log.Error(err)
@@ -237,7 +237,7 @@ var destroyClustersCmd = &cobra.Command{
 		wg.Add(len(openstackcls))
 		for _, cl := range openstackcls {
 			go func(cl ClusterData) {
-				err := cl.DestroyAppsDnsRecordsOsp(&authConfig, &wg)
+				err := cl.DestroyAppsDnsRecordsOsp(&config.Authentication, &wg)
 				if err != nil {
 					defer wg.Done()
 					log.Error(err)
@@ -246,8 +246,8 @@ var destroyClustersCmd = &cobra.Command{
 		}
 		wg.Wait()
 
-		wg.Add(len(clusters))
-		for _, cl := range clusters {
+		wg.Add(len(config.Clusters))
+		for _, cl := range config.Clusters {
 			go func(cl ClusterData) {
 				err := cl.DestroyCluster(&wg)
 				if err != nil {

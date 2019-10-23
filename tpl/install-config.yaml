@@ -12,7 +12,7 @@ controlPlane:
   replicas: {{.NumMasters}}
 metadata:
   creationTimestamp: null
-  name: {{(.ClusterName)}}
+  name: {{.ClusterName}}
 networking:
   clusterNetwork:
     - cidr: {{.PodCidr}}

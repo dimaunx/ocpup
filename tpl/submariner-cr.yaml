@@ -1,0 +1,24 @@
+apiVersion: submariner.io/v1alpha1
+kind: Submariner
+metadata:
+  name: default
+  namespace: openshift-submariner
+spec:
+  namespace: openshift-submariner
+  ceIPSecNATTPort: 4501
+  ceIPSecIKEPort: 501
+  ceIPSecDebug: false
+  ceIPSecPSK: {{.IpsecPsk}}
+  broker: k8s
+  brokerK8sCA: {{.BrokerCa}}
+  brokerK8sRemoteNamespace: submariner-k8s-broker
+  brokerK8sApiServerToken: {{.BrokerToken}}
+  brokerK8sApiServer: {{.BrokerApi}}
+  natEnabled: true
+  debug: false
+  colorCodes: blue
+  clusterID: {{.ClusterId}}
+  clusterCIDR: {{.PodCidr}}
+  serviceCIDR: {{.SvcCidr}}
+  version: {{.SubmarinerTag}}
+  repository: {{.SubmarinerRepo}}

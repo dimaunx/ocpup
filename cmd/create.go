@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -92,7 +91,11 @@ type ClusterData struct {
 }
 
 type ClustersConfig struct {
-	Clusters []ClusterData
+	Clusters       []ClusterData
+	Openshift      OpenshiftData `yaml:"openshift"`
+	Authentication AuthData      `yaml:"authentication"`
+	Helm           HelmData      `yaml:"helm"`
+	Operator       OperatorData  `yaml:"operator"`
 }
 
 type HelmData struct {
@@ -134,6 +137,12 @@ type AuthData struct {
 
 type OpenshiftData struct {
 	Version string `yaml:"version"`
+}
+
+type OperatorData struct {
+	SubmarinerTag  string `yaml:"submarinerTag"`
+	SubmarinerRepo string `yaml:"submarinerRepo"`
+	OperatorTag    string `yaml:"operatorTag"`
 }
 
 type WriteCounter struct {
@@ -399,7 +408,7 @@ func ModifyKubeConfigFiles(cls []ClusterData) error {
 }
 
 //Generate config files
-func GenerateConfigs(cl ClusterData, auth *AuthData) error {
+func (cl *ClusterData) GenerateConfigs(auth *AuthData) error {
 	currentDir, _ := os.Getwd()
 
 	configDir := filepath.Join(currentDir, ".config", cl.ClusterName)
@@ -445,7 +454,7 @@ func GenerateConfigs(cl ClusterData, auth *AuthData) error {
 				return errors.Wrapf(err, "creating clouds.yaml file %s", cl.ClusterName)
 			}
 
-			err = tc.Execute(cf, combined{cl, *auth})
+			err = tc.Execute(cf, combined{*cl, *auth})
 			if err != nil {
 				return errors.Wrapf(err, "creating config file %s", cl.ClusterName)
 			}
@@ -466,7 +475,7 @@ func GenerateConfigs(cl ClusterData, auth *AuthData) error {
 			cl.ClusterName = c.Username + "-" + cl.ClusterName
 		}
 
-		err = t.Execute(f, combined{cl, *auth})
+		err = t.Execute(f, combined{*cl, *auth})
 		if err != nil {
 			return errors.Wrapf(err, "creating config file %s", cl.ClusterName)
 		}
@@ -482,52 +491,20 @@ func GenerateConfigs(cl ClusterData, auth *AuthData) error {
 	return nil
 }
 
-//Generate Psk for submariner tunnels
-func GeneratePsk() string {
-	var letterRunes = []rune("1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	b := make([]rune, 64)
-	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
-	}
-	return string(b)
-}
-
 //Parse the main config file
-func ParseConfigFile() ([]ClusterData, AuthData, HelmData, OpenshiftData, error) {
-
+func ParseConfigFile() (ClustersConfig, error) {
 	var config ClustersConfig
-	var cls []ClusterData
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, errors.Wrapf(err, "Unable to read config")
+		return ClustersConfig{}, errors.Wrapf(err, "Unable to read config")
 	}
 
 	err = viper.Unmarshal(&config)
 	if err != nil {
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, errors.Wrapf(err, "Unable to unmarshal config")
+		return ClustersConfig{}, errors.Wrapf(err, "Unable to unmarshal config")
 	}
-
-	cls = append(cls, config.Clusters...)
-
-	var auth AuthData
-	err = viper.UnmarshalKey("authentication", &auth)
-	if err != nil {
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
-	}
-
-	var helm HelmData
-	err = viper.UnmarshalKey("helm", &helm)
-	if err != nil {
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
-	}
-
-	var openshift OpenshiftData
-	err = viper.UnmarshalKey("openshift", &openshift)
-	if err != nil {
-		return nil, AuthData{}, HelmData{}, OpenshiftData{}, err
-	}
-	return cls, auth, helm, openshift, nil
+	return config, nil
 }
 
 func (cl *ClusterData) WaitForPublicGatewayNodesAws() error {
@@ -1237,12 +1214,12 @@ var clusterCmd = &cobra.Command{
 			log.SetLevel(log.DebugLevel)
 		}
 
-		clusters, authConfig, _, openshiftConfig, err := ParseConfigFile()
+		config, err := ParseConfigFile()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		err = GetDependencies(&openshiftConfig)
+		err = GetDependencies(&config.Openshift)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -1253,18 +1230,18 @@ var clusterCmd = &cobra.Command{
 		}
 
 		log.Infof("Generating install configs...")
-		for _, cl := range clusters {
-			err = GenerateConfigs(cl, &authConfig)
+		for _, cl := range config.Clusters {
+			err = cl.GenerateConfigs(&config.Authentication)
 			if err != nil {
 				log.Fatal(err)
 			}
 		}
 
 		var wg sync.WaitGroup
-		wg.Add(len(clusters))
-		for _, cl := range clusters {
+		wg.Add(len(config.Clusters))
+		for _, cl := range config.Clusters {
 			go func(cl ClusterData) {
-				err := cl.CreateOcpCluster(&openshiftConfig, &authConfig, &wg)
+				err := cl.CreateOcpCluster(&config.Openshift, &config.Authentication, &wg)
 				if err != nil {
 					defer wg.Done()
 					log.Fatal(err)
@@ -1272,7 +1249,6 @@ var clusterCmd = &cobra.Command{
 			}(cl)
 		}
 		wg.Wait()
-
 		log.Infof("✔ Installation completed successfully! The clusters are ready for submariner installation. [ocpup deploy submariner]")
 	},
 }
@@ -1282,12 +1258,12 @@ func init() {
 		Use:   "create",
 		Short: "Create resources",
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
-			clusters, _, _, _, err := ParseConfigFile()
+			config, err := ParseConfigFile()
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			err = ModifyKubeConfigFiles(clusters)
+			err = ModifyKubeConfigFiles(config.Clusters)
 			if err != nil {
 				log.Error(err)
 			}
