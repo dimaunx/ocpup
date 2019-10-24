@@ -8,10 +8,10 @@ env:
   global:
     - GO111MODULE=on
     - GOPROXY=https://proxy.golang.org
-install:
-  - curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.17.0
+services:
+  - docker
 script:
-  - golangci-lint run -v
+  - docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v1.20 golangci-lint run -v
   - go mod vendor && go install -mod vendor
 deploy:
   - provider: script
