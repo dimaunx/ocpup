@@ -1,5 +1,7 @@
 # OCPUP
 
+[![Build Status](https://travis-ci.org/dimaunx/ocpup.svg?branch=master)](https://travis-ci.org/dimaunx/ocpup)
+
 This tool creates 3 OCP4 clusters on AWS and Openstack and connects them with submariner.
 
 ![deployment architecture](https://raw.githubusercontent.com/dimaunx/ocpup/master/docs/img/arch.jpg)
