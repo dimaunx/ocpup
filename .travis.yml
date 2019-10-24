@@ -11,7 +11,7 @@ env:
 services:
   - docker
 script:
-  - docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v1.21 golangci-lint run -v
+  - docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v1.21 golangci-lint run -v -e TIMEOUT=10m
   - go mod vendor && go install -mod vendor
 deploy:
   - provider: script
