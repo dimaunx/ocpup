@@ -1042,7 +1042,7 @@ func (cl *ClusterData) WaitForOperatorDeployment(ns string) error {
 		return err
 	}
 
-	submarinerTimeout := 5 * time.Minute
+	submarinerTimeout := 15 * time.Minute
 	log.Infof("Waiting up to %v for submariner operator to be running for %s...", submarinerTimeout, infraDetails[0])
 	submarinerContext, cancel := context.WithTimeout(ctx, submarinerTimeout)
 	deploymentsClient := clientset.AppsV1().Deployments(ns)
