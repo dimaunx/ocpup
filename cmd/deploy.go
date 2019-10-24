@@ -845,6 +845,7 @@ func (cl *ClusterData) DeleteNameSpace(ns string) error {
 	ctx := context.Background()
 	nsTimeout := 5 * time.Minute
 	nsContext, cancel := context.WithTimeout(ctx, nsTimeout)
+	defer cancel()
 	deletePolicy := metav1.DeletePropagationBackground
 	err = coreClient.Delete(ns, &metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
