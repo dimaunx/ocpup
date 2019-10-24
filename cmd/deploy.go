@@ -1060,7 +1060,7 @@ func (cl *ClusterData) WaitForOperatorDeployment(ns string) error {
 		} else if err != nil {
 			log.Infof("Still waiting for submariner operator deployment for %s %v", infraDetails[0], err)
 		}
-	}, 30*time.Second, submarinerContext.Done())
+	}, 10*time.Second, submarinerContext.Done())
 	err = submarinerContext.Err()
 	if err != nil && err != context.Canceled {
 		return errors.Wrapf(err, "Error waiting for submariner operator deployment %s.", infraDetails[0])
