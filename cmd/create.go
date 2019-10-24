@@ -598,12 +598,12 @@ func (cl *ClusterData) WaitForPublicGatewayNodesAws() error {
 								log.Infof("✔ Submariner gateway node %s is ready for %s.", *instance.PrivateDnsName, infraDetails[0])
 								cancel()
 							} else {
-								log.Infof("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
+								log.Warnf("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
 							}
 						}
 					}
 				} else {
-					log.Infof("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
+					log.Warnf("Still waiting for submariner gateway node %s to be ready for %s.", *instance.PrivateDnsName, infraDetails[0])
 				}
 			}, 10*time.Second, gwNodeContext.Done())
 			err = gwNodeContext.Err()
@@ -1186,10 +1186,10 @@ func (cl *ClusterData) CreateTillerDeployment() error {
 								log.Infof("✔ Tiller successfully deployed to %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
 								cancel()
 							} else {
-								log.Infof("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
+								log.Warnf("Still waiting for tiller deployment %s, ready replicas: %v", infraDetails[0], tillerDeployment.Status.ReadyReplicas)
 							}
 						} else {
-							log.Infof("Still waiting for tiller deployment for %s.", infraDetails[0])
+							log.Warnf("Still waiting for tiller deployment for %s.", infraDetails[0])
 						}
 					}, 30*time.Second, tillerContext.Done())
 

@@ -820,7 +820,7 @@ func (cl *ClusterData) InstallSubmarinerGatewayHelm(wg *sync.WaitGroup, broker *
 }
 
 // Delete namespace
-func (cl *ClusterData) DeleteNameSpace(ns string, t time.Duration) error {
+func (cl *ClusterData) DeleteNameSpace(ns string) error {
 	currentDir, _ := os.Getwd()
 
 	infraDetails, err := cl.ExtractInfraDetails()
@@ -842,20 +842,38 @@ func (cl *ClusterData) DeleteNameSpace(ns string, t time.Duration) error {
 	log.Debugf("Deleting namespace: %s for  %s.", ns, infraDetails[0])
 	coreClient := clientset.CoreV1().Namespaces()
 
+	ctx := context.Background()
+	nsTimeout := 5 * time.Minute
+	nsContext, cancel := context.WithTimeout(ctx, nsTimeout)
 	deletePolicy := metav1.DeletePropagationBackground
 	err = coreClient.Delete(ns, &metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	})
 	if err != nil && strings.Contains(err.Error(), "not found") {
 		log.Infof("✔ Namespace: %s for %s was deleted.", ns, infraDetails[0])
+		cancel()
 	} else if err != nil {
-		return errors.Wrapf(err, "Failed to delete submariner namespace: %s for %s.", ns, infraDetails[0])
+		return errors.Wrapf(err, "Failed to delete submariner namespace: %s for %s", ns, infraDetails[0])
 	} else {
-		log.Infof("✔ Namespace: %s for %s was deleted.", ns, infraDetails[0])
+		log.Infof("✔ Namespace: %s for %s was marked for deletion.", ns, infraDetails[0])
 	}
 
-	log.Infof("✔ Waiting %v seconds for garbage collector to delete resources for %s ,namespace: %s.", t*time.Second, infraDetails[0], ns)
-	time.Sleep(t * time.Second)
+	log.Infof("Waiting up to %v for namespace: %s to be deleted for %s...", nsTimeout, ns, infraDetails[0])
+	nsClient := clientset.CoreV1().Namespaces()
+	wait.Until(func() {
+		namespaces, err := nsClient.Get(ns, metav1.GetOptions{})
+		if err != nil && strings.Contains(err.Error(), "not found") {
+			log.Infof("✔ Namespace: %s for %s was deleted.", ns, infraDetails[0])
+			cancel()
+		}
+		if err == nil && (namespaces.Status.Phase == "Terminating" || namespaces.Status.Phase == "Active") {
+			log.Warnf("Still waiting for namespace: %s deletion for %s status: %s", ns, infraDetails[0], namespaces.Status.Phase)
+		}
+	}, 10*time.Second, nsContext.Done())
+	err = nsContext.Err()
+	if err != nil && err != context.Canceled {
+		return errors.Wrapf(err, "Error waiting for submariner operator deployment %s.", infraDetails[0])
+	}
 	return nil
 }
 
@@ -1008,11 +1026,11 @@ func (cl *ClusterData) WaitForSubmarinerDeployment(ns string) error {
 					log.Infof("✔ Submariner engine successfully deployed to %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
 					cancel()
 				} else if deploy.Status.ReadyReplicas < int32(cl.NumGateways) {
-					log.Infof("Still waiting for submariner engine deployment %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
+					log.Warnf("Still waiting for submariner engine deployment %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
 				}
 			}
 		} else if err != nil {
-			log.Infof("Still waiting for submariner engine deployment for %s %v", infraDetails[0], err)
+			log.Warnf("Still waiting for submariner engine deployment for %s %v", infraDetails[0], err)
 		}
 	}, 10*time.Second, submarinerContext.Done())
 	err = submarinerContext.Err()
@@ -1054,11 +1072,11 @@ func (cl *ClusterData) WaitForOperatorDeployment(ns string) error {
 					log.Infof("✔ Submariner operator was successfully deployed to %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
 					cancel()
 				} else if deploy.Status.ReadyReplicas < 1 {
-					log.Infof("Still waiting for submariner operator deployment %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
+					log.Warnf("Still waiting for submariner operator deployment %s, ready replicas: %v", infraDetails[0], deploy.Status.ReadyReplicas)
 				}
 			}
 		} else if err != nil {
-			log.Infof("Still waiting for submariner operator deployment for %s %v", infraDetails[0], err)
+			log.Warnf("Still waiting for submariner operator deployment for %s %v", infraDetails[0], err)
 		}
 	}, 10*time.Second, submarinerContext.Done())
 	err = submarinerContext.Err()
@@ -1095,13 +1113,13 @@ var deploySubmarinerCmd = &cobra.Command{
 		switch DeployTool {
 		case "operator":
 			if Reinstall {
-				err = broker.DeleteNameSpace(submOperatorBrokerNsName, 0)
+				err = broker.DeleteNameSpace(submOperatorBrokerNsName)
 				if err != nil {
 					log.Fatal(err)
 				}
 
 				for _, cl := range config.Clusters {
-					err = cl.DeleteNameSpace(submOperatorNsName, 30)
+					err = cl.DeleteNameSpace(submOperatorNsName)
 					if err != nil {
 						log.Fatal(err)
 					}
