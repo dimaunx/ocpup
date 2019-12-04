@@ -41,7 +41,7 @@ Config file template that supports OSP and AWS installations:
 
 ```yaml
 openshift:
-  version: 4.2.0-0.nightly-2019-10-01-210901
+  version: 4.2.8
 clusters:
   - clusterName: cl1
     submarinerType: broker
@@ -118,7 +118,7 @@ Important config variables:
 
 | Variable Name   | Description                                                                                                               |
 |:--------------- |:--------------------------------------------------------------------------------------------------------------------------|
-| version         | OCP version to install. The tools supports OCP [4.2.x] versions. 4.2 is currently in dev preview.                          |     
+| version         | OCP version to install. The tools supports OCP [4.2.x] versions.                          |     
 | dnsDomain       | AWS Route53 hosted zone domain name that you own. If not using openshift-dev account, please create a public hosted zone. | 
 | pullSecret      | Security credentials from [Red Hat portal], please put this credentials in single quotes ''.                              | 
 | sshKey          | SSH pub key from your workstation. Must have the corresponding private key.                                               |
@@ -221,6 +221,5 @@ The deletion process takes up to 45 minutes, please be patient.
 [Red Hat portal]: https://cloud.redhat.com/openshift/install/aws/installer-provisioned
 [Route53 public hosted zone]: https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/AboutHZWorkingWith.html
 [$GOPATH configured]: https://github.com/golang/go/wiki/SettingGOPATH
-[4.1.x]: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/
-[4.2.x]: http://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/
+[4.2.x]: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/
 [osp prerequisites]: https://github.com/openshift/installer/blob/master/docs/user/openstack/README.md#openstack-requirements
