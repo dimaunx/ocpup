@@ -800,15 +800,13 @@ func (cl *ClusterData) CreateOcpCluster(v *OpenshiftData, auth *AuthData, wg *sy
 	cmd.Stderr = buf
 
 	err = cmd.Run()
-	if err != nil {
+	if err != nil && strings.Contains(buf.String(), "already exists") {
 		log.Debugf("✔ %s %s", err.Error(), cl.ClusterName)
-		if !strings.Contains(buf.String(), "already exists") {
-			// Wait additional time for installation to complete
-			log.Infof("Waiting additional time for cluster %s installation to complete on %s.", cl.ClusterName, cl.Platform.Name)
-			cmdArgs = []string{"wait-for", "install-complete", "--dir", configDir, "--log-level", "debug"}
-			cmd = exec.Command(cmdName, cmdArgs...)
-			err = cmd.Run()
-		}
+		// Previous cluster installation exists - Waiting additional time for installation to complete
+		log.Infof("Waiting additional time for previous cluster %s installation to complete on %s.", cl.ClusterName, cl.Platform.Name)
+		cmdArgs = []string{"wait-for", "install-complete", "--dir", configDir, "--log-level", "debug"}
+		cmd = exec.Command(cmdName, cmdArgs...)
+		err = cmd.Run()
 	}
 
 	if err != nil {
