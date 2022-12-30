@@ -3,7 +3,7 @@ module ocpup
 go 1.12
 
 require (
-	github.com/aws/aws-sdk-go v1.25.19
+	github.com/aws/aws-sdk-go v1.33.0
 	github.com/dsnet/compress v0.0.1 // indirect
 	github.com/dustin/go-humanize v1.0.0
 	github.com/frankban/quicktest v1.5.0 // indirect
@@ -17,7 +17,7 @@ require (
 	github.com/openshift/api v3.9.0+incompatible
 	github.com/openshift/client-go v3.9.0+incompatible
 	github.com/pierrec/lz4 v2.3.0+incompatible // indirect
-	github.com/pkg/errors v0.8.1
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.4.2
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/viper v1.4.0
